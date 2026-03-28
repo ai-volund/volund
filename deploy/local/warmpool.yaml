@@ -1,0 +1,12 @@
+apiVersion: volund.ai/v1alpha1
+kind: AgentWarmPool
+metadata:
+  name: default-pool
+  namespace: default
+spec:
+  replicas: 2
+  tenantId: dev-tenant
+  image: ghcr.io/ai-volund/volund-agent:latest
+  llmRouterAddr: volund:9091
+  natsUrl: nats://nats:4222
+  idleTimeoutSeconds: 300

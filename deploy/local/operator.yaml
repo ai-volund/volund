@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: volund-operator
+  namespace: default
+spec:
+  selector:
+    matchLabels:
+      app: volund-operator
+  template:
+    metadata:
+      labels:
+        app: volund-operator
+    spec:
+      serviceAccountName: volund-operator
+      containers:
+        - name: operator
+          image: ghcr.io/ai-volund/volund-operator
+          args:
+            - --metrics-bind-address=:8080
+            - --health-probe-bind-address=:8081
+          ports:
+            - containerPort: 8080
+              name: metrics
+            - containerPort: 8081
+              name: health
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 5
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: volund-operator
+  namespace: default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: volund-operator
+rules:
+  - apiGroups: [volund.ai]
+    resources: [agentwarmpool, agentinstances]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [volund.ai]
+    resources: [agentwarmpool/status, agentinstances/status]
+    verbs: [get, update, patch]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: volund-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: volund-operator
+subjects:
+  - kind: ServiceAccount
+    name: volund-operator
+    namespace: default
