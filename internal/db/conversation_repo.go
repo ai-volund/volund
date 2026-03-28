@@ -83,6 +83,11 @@ func (r *ConversationRepo) UpdateTitle(ctx context.Context, id, title string) er
 	return err
 }
 
+func (r *ConversationRepo) Delete(ctx context.Context, id string) error {
+	_, err := r.pool.Exec(ctx, `UPDATE conversations SET status = 'deleted', updated_at = NOW() WHERE id = $1`, id)
+	return err
+}
+
 // ── Messages ──────────────────────────────────────────────────────────────────
 
 func (r *ConversationRepo) AddMessage(ctx context.Context, m *Message) (*Message, error) {

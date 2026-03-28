@@ -14,6 +14,8 @@ import (
 
 	"github.com/ai-volund/volund/internal/auth"
 	"github.com/ai-volund/volund/internal/config"
+	"github.com/ai-volund/volund/internal/db"
+	"github.com/ai-volund/volund/internal/gateway/api"
 	"github.com/ai-volund/volund/internal/llm"
 
 	volundpb "github.com/ai-volund/volund-proto/gen/go/volund/v1"
@@ -23,13 +25,14 @@ import (
 type Server struct {
 	cfg        *config.Config
 	router     *llm.Router
+	pool       *db.Pool
 	httpServer *http.Server
 	grpcServer *grpc.Server
 }
 
 // New creates a new gateway Server.
-func New(cfg *config.Config, router *llm.Router) *Server {
-	return &Server{cfg: cfg, router: router}
+func New(cfg *config.Config, router *llm.Router, pool *db.Pool) *Server {
+	return &Server{cfg: cfg, router: router, pool: pool}
 }
 
 // Start launches the HTTP and gRPC servers.
@@ -42,15 +45,12 @@ func (s *Server) Start(ctx context.Context) error {
 		grpc.ChainStreamInterceptor(auth.StreamServerInterceptor(tm)),
 	)
 
-	// Health check
 	healthSrv := health.NewServer()
 	healthpb.RegisterHealthServer(s.grpcServer, healthSrv)
 	healthSrv.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
-
-	// Reflection for debugging
 	reflection.Register(s.grpcServer)
 
-	// Register stub gateway services
+	// Stub services on gRPC (full implementations live in the HTTP layer for now).
 	volundpb.RegisterAuthServiceServer(s.grpcServer, &volundpb.UnimplementedAuthServiceServer{})
 	volundpb.RegisterChatServiceServer(s.grpcServer, &volundpb.UnimplementedChatServiceServer{})
 	volundpb.RegisterForgeServiceServer(s.grpcServer, &volundpb.UnimplementedForgeServiceServer{})
@@ -60,7 +60,6 @@ func (s *Server) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("gateway grpc listen: %w", err)
 	}
-
 	go func() {
 		slog.Info("gateway gRPC server starting", "addr", s.cfg.GatewayGRPCAddr)
 		if err := s.grpcServer.Serve(grpcLis); err != nil {
@@ -70,16 +69,33 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// --- HTTP server ---
 	mux := http.NewServeMux()
+
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, `{"status":"ok"}`)
 	})
 
-	// WebSocket: real-time LLM streaming
+	// WebSocket: real-time LLM streaming.
 	mux.HandleFunc("/ws/chat", s.handleChat)
 
-	// Apply middleware chain: recovery -> cors -> logging -> auth -> handler
+	// REST API — only register if we have a DB pool.
+	if s.pool != nil {
+		svc := &api.Services{
+			Auth:    auth.NewService(tm, db.NewUserRepo(s.pool), db.NewTenantRepo(s.pool), db.NewRefreshTokenRepo(s.pool)),
+			TM:      tm,
+			Users:   db.NewUserRepo(s.pool),
+			Tenants: db.NewTenantRepo(s.pool),
+			Agents:  db.NewAgentRepo(s.pool),
+			Convos:  db.NewConversationRepo(s.pool),
+			Invites: db.NewInviteRepo(s.pool),
+		}
+		api.Register(mux, svc)
+		slog.Info("REST API routes registered")
+	} else {
+		slog.Warn("no database pool — REST API routes not registered")
+	}
+
 	handler := RecoveryMiddleware(
 		CORSMiddleware(
 			LoggingMiddleware(

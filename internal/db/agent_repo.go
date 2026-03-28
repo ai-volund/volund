@@ -88,6 +88,28 @@ func (r *AgentRepo) ListProfiles(ctx context.Context, tenantID string) ([]*Agent
 	})
 }
 
+func (r *AgentRepo) UpdateProfile(ctx context.Context, p *AgentProfile) (*AgentProfile, error) {
+	skills := p.Skills
+	if skills == nil {
+		skills = json.RawMessage("[]")
+	}
+	row := r.pool.QueryRow(ctx, `
+		UPDATE agent_profiles
+		SET name=$2, profile_type=$3, system_prompt=$4, model_provider=$5,
+		    model_id=$6, temperature=$7, max_tokens=$8, skills=$9, updated_at=NOW()
+		WHERE id=$1
+		RETURNING id, tenant_id, name, profile_type, system_prompt, model_provider,
+		          model_id, temperature, max_tokens, skills, created_at, updated_at
+	`, p.ID, p.Name, p.ProfileType, p.SystemPrompt, p.ModelProvider, p.ModelID,
+		p.Temperature, p.MaxTokens, skills)
+	return scanProfile(row)
+}
+
+func (r *AgentRepo) DeleteProfile(ctx context.Context, id string) error {
+	_, err := r.pool.Exec(ctx, `DELETE FROM agent_profiles WHERE id = $1`, id)
+	return err
+}
+
 // ── Instances ─────────────────────────────────────────────────────────────────
 
 func (r *AgentRepo) CreateInstance(ctx context.Context, tenantID string, profileID *string) (*AgentInstance, error) {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"embed"
 	"fmt"
+	"strings"
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
@@ -48,7 +49,16 @@ func Migrate(dsn string) error {
 		return fmt.Errorf("db migrate: source: %w", err)
 	}
 
-	m, err := migrate.NewWithSourceInstance("iofs", src, "pgx5://"+dsn)
+	// golang-migrate pgx5 driver expects "pgx5://user:pass@host/db" — replace
+	// "postgres://" or "postgresql://" prefix with "pgx5://".
+	migrateURL := dsn
+	for _, prefix := range []string{"postgresql://", "postgres://"} {
+		if strings.HasPrefix(dsn, prefix) {
+			migrateURL = "pgx5://" + strings.TrimPrefix(dsn, prefix)
+			break
+		}
+	}
+	m, err := migrate.NewWithSourceInstance("iofs", src, migrateURL)
 	if err != nil {
 		return fmt.Errorf("db migrate: init: %w", err)
 	}

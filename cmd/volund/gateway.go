@@ -27,7 +27,7 @@ func gatewayCmd() *cobra.Command {
 			defer cancel()
 
 			router := buildRouter(cfg)
-			srv := gateway.New(cfg, router)
+			srv := gateway.New(cfg, router, nil) // nil pool — DB not available standalone
 			if err := srv.Start(ctx); err != nil {
 				return err
 			}

@@ -65,6 +65,17 @@ func (r *UserRepo) AddToTenant(ctx context.Context, tenantID, userID, role strin
 	return err
 }
 
+// GetPrimaryMembership returns the first tenant and role for a user.
+func (r *UserRepo) GetPrimaryMembership(ctx context.Context, userID string) (tenantID, role string, err error) {
+	row := r.pool.QueryRow(ctx, `
+		SELECT tenant_id, role FROM org_members WHERE user_id = $1 ORDER BY joined_at LIMIT 1
+	`, userID)
+	if scanErr := row.Scan(&tenantID, &role); scanErr != nil {
+		return "", "member", nil // no membership yet
+	}
+	return tenantID, role, nil
+}
+
 func (r *UserRepo) ListByTenant(ctx context.Context, tenantID string) ([]*User, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT u.id, u.email, u.display_name, u.password_hash, u.oidc_subject, u.oidc_provider,

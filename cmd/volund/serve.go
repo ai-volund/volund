@@ -12,9 +12,10 @@ import (
 
 	"github.com/ai-volund/volund/internal/config"
 	"github.com/ai-volund/volund/internal/controlplane"
+	"github.com/ai-volund/volund/internal/db"
 	"github.com/ai-volund/volund/internal/gateway"
-	anthropicProvider "github.com/ai-volund/volund/internal/llm/anthropic"
 	"github.com/ai-volund/volund/internal/llm"
+	anthropicProvider "github.com/ai-volund/volund/internal/llm/anthropic"
 	openaiProvider "github.com/ai-volund/volund/internal/llm/openai"
 )
 
@@ -33,9 +34,28 @@ func serveCmd() *cobra.Command {
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
 
+			// Database
+			var pool *db.Pool
+			if cfg.DatabaseURL != "" {
+				if err := db.Migrate(cfg.DatabaseURL); err != nil {
+					slog.Error("migration failed", "error", err)
+					os.Exit(1)
+				}
+				var err error
+				pool, err = db.Connect(ctx, cfg.DatabaseURL)
+				if err != nil {
+					slog.Error("db connect failed", "error", err)
+					os.Exit(1)
+				}
+				defer pool.Close()
+				slog.Info("database connected")
+			} else {
+				slog.Warn("VOLUND_DATABASE_URL not set — running without database")
+			}
+
 			router := buildRouter(cfg)
 
-			gw := gateway.New(cfg, router)
+			gw := gateway.New(cfg, router, pool)
 			cp := controlplane.New(cfg, router)
 
 			if err := gw.Start(ctx); err != nil {
