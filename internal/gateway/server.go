@@ -14,6 +14,7 @@ import (
 
 	"github.com/ai-volund/volund/internal/auth"
 	"github.com/ai-volund/volund/internal/config"
+	"github.com/ai-volund/volund/internal/llm"
 
 	volundpb "github.com/ai-volund/volund-proto/gen/go/volund/v1"
 )
@@ -21,13 +22,14 @@ import (
 // Server is the gateway server that exposes HTTP and gRPC endpoints.
 type Server struct {
 	cfg        *config.Config
+	router     *llm.Router
 	httpServer *http.Server
 	grpcServer *grpc.Server
 }
 
 // New creates a new gateway Server.
-func New(cfg *config.Config) *Server {
-	return &Server{cfg: cfg}
+func New(cfg *config.Config, router *llm.Router) *Server {
+	return &Server{cfg: cfg, router: router}
 }
 
 // Start launches the HTTP and gRPC servers.
@@ -73,6 +75,9 @@ func (s *Server) Start(ctx context.Context) error {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, `{"status":"ok"}`)
 	})
+
+	// WebSocket: real-time LLM streaming
+	mux.HandleFunc("/ws/chat", s.handleChat)
 
 	// Apply middleware chain: recovery -> cors -> logging -> auth -> handler
 	handler := RecoveryMiddleware(

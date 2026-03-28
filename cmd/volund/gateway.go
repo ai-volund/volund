@@ -26,7 +26,8 @@ func gatewayCmd() *cobra.Command {
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
 
-			srv := gateway.New(cfg)
+			router := buildRouter(cfg)
+			srv := gateway.New(cfg, router)
 			if err := srv.Start(ctx); err != nil {
 				return err
 			}

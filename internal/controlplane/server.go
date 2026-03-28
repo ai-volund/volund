@@ -24,12 +24,13 @@ import (
 // Server is the control plane gRPC server.
 type Server struct {
 	cfg        *config.Config
+	router     *llm.Router
 	grpcServer *grpc.Server
 }
 
 // New creates a new controlplane Server.
-func New(cfg *config.Config) *Server {
-	return &Server{cfg: cfg}
+func New(cfg *config.Config, router *llm.Router) *Server {
+	return &Server{cfg: cfg, router: router}
 }
 
 // Start launches the control plane gRPC server.
@@ -53,7 +54,7 @@ func (s *Server) Start(ctx context.Context) error {
 	volundpb.RegisterTenantServiceServer(s.grpcServer, tenant.NewService())
 	volundpb.RegisterAgentServiceServer(s.grpcServer, agent.NewService())
 	volundpb.RegisterTaskServiceServer(s.grpcServer, task.NewService())
-	volundpb.RegisterLLMServiceServer(s.grpcServer, llm.NewService())
+	volundpb.RegisterLLMServiceServer(s.grpcServer, llm.NewService(s.router))
 
 	lis, err := net.Listen("tcp", s.cfg.ControlPlaneAddr)
 	if err != nil {

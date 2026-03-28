@@ -26,7 +26,8 @@ func controlplaneCmd() *cobra.Command {
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
 
-			srv := controlplane.New(cfg)
+			router := buildRouter(cfg)
+			srv := controlplane.New(cfg, router)
 			if err := srv.Start(ctx); err != nil {
 				return err
 			}

@@ -11,6 +11,14 @@ type Config struct {
 	ControlPlaneAddr string
 	JWTSecret        string
 	LogLevel         string
+
+	// Database
+	DatabaseURL string // VOLUND_DATABASE_URL (postgres DSN)
+
+	// LLM providers
+	OpenAIAPIKey    string // VOLUND_OPENAI_API_KEY
+	OpenAIBaseURL   string // VOLUND_OPENAI_BASE_URL (optional, for custom endpoints)
+	AnthropicAPIKey string // VOLUND_ANTHROPIC_API_KEY
 }
 
 // Load reads configuration from environment variables with sensible defaults.
@@ -21,6 +29,11 @@ func Load() *Config {
 		ControlPlaneAddr: envOrDefault("VOLUND_CONTROLPLANE_ADDR", ":9091"),
 		JWTSecret:        envOrDefault("VOLUND_JWT_SECRET", "dev-secret-change-me"),
 		LogLevel:         envOrDefault("VOLUND_LOG_LEVEL", "info"),
+
+		DatabaseURL:     envOrDefault("VOLUND_DATABASE_URL", "postgres://volund:volund@localhost:5432/volund?sslmode=disable"),
+		OpenAIAPIKey:    os.Getenv("VOLUND_OPENAI_API_KEY"),
+		OpenAIBaseURL:   os.Getenv("VOLUND_OPENAI_BASE_URL"),
+		AnthropicAPIKey: os.Getenv("VOLUND_ANTHROPIC_API_KEY"),
 	}
 }
 

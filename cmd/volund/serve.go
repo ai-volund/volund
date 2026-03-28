@@ -13,6 +13,9 @@ import (
 	"github.com/ai-volund/volund/internal/config"
 	"github.com/ai-volund/volund/internal/controlplane"
 	"github.com/ai-volund/volund/internal/gateway"
+	anthropicProvider "github.com/ai-volund/volund/internal/llm/anthropic"
+	"github.com/ai-volund/volund/internal/llm"
+	openaiProvider "github.com/ai-volund/volund/internal/llm/openai"
 )
 
 const shutdownTimeout = 10 * time.Second
@@ -30,8 +33,10 @@ func serveCmd() *cobra.Command {
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
 
-			gw := gateway.New(cfg)
-			cp := controlplane.New(cfg)
+			router := buildRouter(cfg)
+
+			gw := gateway.New(cfg, router)
+			cp := controlplane.New(cfg, router)
 
 			if err := gw.Start(ctx); err != nil {
 				return err
@@ -55,6 +60,23 @@ func serveCmd() *cobra.Command {
 
 	cmd.Flags().Bool("all", true, "Run all services (default)")
 	return cmd
+}
+
+// buildRouter creates the LLM router and registers providers based on config.
+func buildRouter(cfg *config.Config) *llm.Router {
+	router := llm.NewRouter()
+	if cfg.OpenAIAPIKey != "" {
+		router.Register(openaiProvider.New(cfg.OpenAIAPIKey, cfg.OpenAIBaseURL))
+		slog.Info("registered LLM provider", "provider", "openai")
+	}
+	if cfg.AnthropicAPIKey != "" {
+		router.Register(anthropicProvider.New(cfg.AnthropicAPIKey, ""))
+		slog.Info("registered LLM provider", "provider", "anthropic")
+	}
+	if len(router.Providers()) == 0 {
+		slog.Warn("no LLM providers configured — set VOLUND_OPENAI_API_KEY or VOLUND_ANTHROPIC_API_KEY")
+	}
+	return router
 }
 
 func setupLogging(level string) {
