@@ -268,7 +268,17 @@ func toMessages(msgs []*llm.Message) ([]ogai.ChatCompletionMessageParamUnion, er
 		case "user":
 			out = append(out, ogai.UserMessage(textContent(m.Content)))
 		case "tool":
-			out = append(out, ogai.ToolMessage(textContent(m.Content), m.ToolCallID))
+			// OpenAI requires one message per tool result, each with its tool_call_id.
+			// The agent sends a single "tool" message with multiple ToolResult blocks.
+			toolResults := extractToolResults(m.Content)
+			if len(toolResults) > 0 {
+				for _, tr := range toolResults {
+					out = append(out, ogai.ToolMessage(tr.Content, tr.ToolUseID))
+				}
+			} else {
+				// Fallback: message-level ToolCallID (legacy single-result path).
+				out = append(out, ogai.ToolMessage(textContent(m.Content), m.ToolCallID))
+			}
 		case "assistant":
 			toolCalls := extractToolCalls(m.Content)
 			if len(toolCalls) > 0 {
@@ -298,6 +308,16 @@ func textContent(blocks []*llm.Block) string {
 		}
 	}
 	return ""
+}
+
+func extractToolResults(blocks []*llm.Block) []*llm.ToolResultData {
+	var results []*llm.ToolResultData
+	for _, b := range blocks {
+		if b.Type == "tool_result" && b.ToolResult != nil {
+			results = append(results, b.ToolResult)
+		}
+	}
+	return results
 }
 
 func extractToolCalls(blocks []*llm.Block) []ogai.ChatCompletionMessageToolCallParam {

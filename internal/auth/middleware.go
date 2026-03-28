@@ -64,7 +64,10 @@ func StreamServerInterceptor(tm *TokenManager) grpc.StreamServerInterceptor {
 	}
 }
 
-// HTTPMiddleware returns an HTTP middleware that validates JWTs from the Authorization header.
+// HTTPMiddleware returns an HTTP middleware that validates JWTs.
+// Token is read from the Authorization header first; if absent, falls back to
+// the ?token= query parameter (needed for WebSocket upgrades — browsers cannot
+// set custom headers on WebSocket connections).
 func HTTPMiddleware(tm *TokenManager, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/healthz" {
@@ -72,13 +75,18 @@ func HTTPMiddleware(tm *TokenManager, next http.Handler) http.Handler {
 			return
 		}
 
-		authHeader := r.Header.Get("Authorization")
-		if authHeader == "" {
+		tokenStr := ""
+		if authHeader := r.Header.Get("Authorization"); authHeader != "" {
+			tokenStr = strings.TrimPrefix(authHeader, "Bearer ")
+		} else if q := r.URL.Query().Get("token"); q != "" {
+			tokenStr = q
+		}
+
+		if tokenStr == "" {
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
 		claims, err := tm.Validate(tokenStr)
 		if err != nil {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -116,6 +124,8 @@ func shouldSkipAuth(method string) bool {
 		"/grpc.reflection.v1alpha.ServerReflection/",
 		"/grpc.reflection.v1.ServerReflection/",
 		"/volund.v1.AuthService/Login",
+		// Internal: agent pods call the LLM Router without user JWTs.
+		"/volund.v1.LLMService/",
 	}
 	for _, skip := range skipMethods {
 		if strings.HasPrefix(method, skip) || method == skip {

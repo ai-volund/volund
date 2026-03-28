@@ -1,0 +1,3 @@
+DROP INDEX IF EXISTS idx_memories_embedding;
+DROP TABLE IF EXISTS memories;
+DROP EXTENSION IF EXISTS vector;

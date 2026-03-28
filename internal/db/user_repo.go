@@ -94,6 +94,52 @@ func (r *UserRepo) ListByTenant(ctx context.Context, tenantID string) ([]*User, 
 	})
 }
 
+// FindOrCreateByOIDC looks up a user by OIDC provider + subject.
+// If no user exists, creates one with the given email and display name.
+// Returns the user and whether it was newly created.
+func (r *UserRepo) FindOrCreateByOIDC(ctx context.Context, provider, subject, email, displayName string) (*User, bool, error) {
+	// Try to find existing user by OIDC identity.
+	row := r.pool.QueryRow(ctx, `
+		SELECT id, email, display_name, password_hash, oidc_subject, oidc_provider, created_at, updated_at
+		FROM users WHERE oidc_provider = $1 AND oidc_subject = $2
+	`, provider, subject)
+	u, err := scanUser(row)
+	if err == nil {
+		return u, false, nil
+	}
+
+	// Not found by OIDC — check if email already exists (link accounts).
+	existing, err := r.GetByEmail(ctx, email)
+	if err == nil && existing != nil {
+		// Link OIDC identity to existing email-based account.
+		_, err = r.pool.Exec(ctx, `
+			UPDATE users SET oidc_provider = $1, oidc_subject = $2, updated_at = NOW()
+			WHERE id = $3
+		`, provider, subject, existing.ID)
+		if err != nil {
+			return nil, false, fmt.Errorf("link oidc to user: %w", err)
+		}
+		existing.OIDCProvider = &provider
+		existing.OIDCSubject = &subject
+		return existing, false, nil
+	}
+
+	// Create new user with OIDC identity.
+	if displayName == "" {
+		displayName = email
+	}
+	newRow := r.pool.QueryRow(ctx, `
+		INSERT INTO users (email, display_name, oidc_provider, oidc_subject)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id, email, display_name, password_hash, oidc_subject, oidc_provider, created_at, updated_at
+	`, email, displayName, provider, subject)
+	u, err = scanUser(newRow)
+	if err != nil {
+		return nil, false, fmt.Errorf("create oidc user: %w", err)
+	}
+	return u, true, nil
+}
+
 func scanUser(row pgx.Row) (*User, error) {
 	u := &User{}
 	err := row.Scan(

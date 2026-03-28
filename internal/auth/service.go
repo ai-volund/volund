@@ -157,6 +157,45 @@ func (s *Service) RefreshToken(ctx context.Context, rawRefreshToken string) (*To
 	return pair, nil
 }
 
+// LoginOIDC authenticates a user via OIDC claims. Creates the user and org if
+// they don't exist yet. Returns tokens and user info.
+func (s *Service) LoginOIDC(ctx context.Context, claims *OIDCClaims) (*TokenPair, *db.User, error) {
+	if claims.Email == "" {
+		return nil, nil, fmt.Errorf("OIDC provider did not return an email")
+	}
+
+	user, created, err := s.users.FindOrCreateByOIDC(ctx, claims.Provider, claims.Subject, claims.Email, claims.Name)
+	if err != nil {
+		return nil, nil, fmt.Errorf("find or create OIDC user: %w", err)
+	}
+
+	// If the user was just created, create a default org for them.
+	if created {
+		orgName := claims.Name + "'s Org"
+		if claims.Name == "" {
+			orgName = strings.Split(claims.Email, "@")[0] + "'s Org"
+		}
+		tenant, err := s.tenants.Create(ctx, orgName, slugify(orgName), "free")
+		if err != nil {
+			return nil, nil, fmt.Errorf("create tenant for OIDC user: %w", err)
+		}
+		if err := s.users.AddToTenant(ctx, tenant.ID, user.ID, "owner"); err != nil {
+			return nil, nil, fmt.Errorf("add OIDC user to tenant: %w", err)
+		}
+	}
+
+	tenantID, role, err := s.primaryTenant(ctx, user.ID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve tenant for OIDC user: %w", err)
+	}
+
+	pair, err := s.issuePair(ctx, user.ID, tenantID, role)
+	if err != nil {
+		return nil, nil, err
+	}
+	return pair, user, nil
+}
+
 // Logout revokes all refresh tokens for the user whose refresh token is given.
 func (s *Service) Logout(ctx context.Context, rawRefreshToken string) error {
 	rt, err := s.refreshTokens.GetByHash(ctx, rawRefreshToken)

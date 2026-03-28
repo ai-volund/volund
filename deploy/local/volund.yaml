@@ -29,17 +29,19 @@ spec:
               value: ":9091"
             - name: VOLUND_JWT_SECRET
               value: dev-secret-change-me
+            - name: VOLUND_SKILL_CONFIG
+              value: /etc/volund/skills.json
+            - name: VOLUND_CREDENTIAL_KEY
+              value: "89731e7b8305a1dacfd70c1a0762d23c1c42c1f092dfedc7de9e3d4e842096ed"
+            - name: VOLUND_OTLP_ENDPOINT
+              value: otel-collector:4317
+            - name: VOLUND_OPENAI_BASE_URL
+              value: https://api.ai.it.ufl.edu
             - name: VOLUND_OPENAI_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: volund-secrets
                   key: openai-api-key
-                  optional: true
-            - name: VOLUND_ANTHROPIC_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: volund-secrets
-                  key: anthropic-api-key
                   optional: true
           ports:
             - containerPort: 8080

@@ -182,6 +182,45 @@ func (r *AgentRepo) GetInstance(ctx context.Context, id string) (*AgentInstance,
 	return scanInstance(row)
 }
 
+// GetProfileByName looks up a profile by (tenant_id, name).
+func (r *AgentRepo) GetProfileByName(ctx context.Context, tenantID, name string) (*AgentProfile, error) {
+	row := r.pool.QueryRow(ctx, `
+		SELECT id, tenant_id, name, profile_type, system_prompt, model_provider,
+		       model_id, temperature, max_tokens, skills, created_at, updated_at
+		FROM agent_profiles WHERE tenant_id = $1 AND name = $2
+	`, tenantID, name)
+	return scanProfile(row)
+}
+
+// GetInstanceByPodName looks up an instance by its pod_name.
+func (r *AgentRepo) GetInstanceByPodName(ctx context.Context, podName string) (*AgentInstance, error) {
+	row := r.pool.QueryRow(ctx, `
+		SELECT id, tenant_id, profile_id, pod_name, pod_namespace, state,
+		       claimed_at, released_at, last_heartbeat, created_at
+		FROM agent_instances WHERE pod_name = $1
+	`, podName)
+	return scanInstance(row)
+}
+
+// UpsertInstanceByPodName creates or updates an agent instance identified by pod_name.
+// If a row with the given pod_name already exists, it updates the heartbeat and state.
+// Otherwise it inserts a new row. Returns the instance ID.
+func (r *AgentRepo) UpsertInstanceByPodName(ctx context.Context, tenantID string, profileID *string, podName, namespace, state string) (string, error) {
+	var id string
+	err := r.pool.QueryRow(ctx, `
+		INSERT INTO agent_instances (tenant_id, profile_id, pod_name, pod_namespace, state, last_heartbeat)
+		VALUES ($1, $2, $3, $4, $5, NOW())
+		ON CONFLICT (pod_name) WHERE pod_name IS NOT NULL
+		DO UPDATE SET last_heartbeat = NOW(),
+		              state = CASE WHEN agent_instances.state = 'active' THEN 'active' ELSE EXCLUDED.state END
+		RETURNING id
+	`, tenantID, profileID, podName, namespace, state).Scan(&id)
+	if err != nil {
+		return "", fmt.Errorf("upsert instance by pod: %w", err)
+	}
+	return id, nil
+}
+
 // ── Scan helpers ──────────────────────────────────────────────────────────────
 
 func scanProfile(row pgx.Row) (*AgentProfile, error) {

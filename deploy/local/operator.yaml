@@ -47,10 +47,10 @@ metadata:
   name: volund-operator
 rules:
   - apiGroups: [volund.ai]
-    resources: [agentwarmpool, agentinstances]
+    resources: [agentwarmpool, agentinstances, agentprofiles, skills]
     verbs: [get, list, watch, create, update, patch, delete]
   - apiGroups: [volund.ai]
-    resources: [agentwarmpool/status, agentinstances/status]
+    resources: [agentwarmpool/status, agentinstances/status, agentprofiles/status, skills/status]
     verbs: [get, update, patch]
   - apiGroups: [""]
     resources: [pods]

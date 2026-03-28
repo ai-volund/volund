@@ -110,6 +110,62 @@ func (s *Services) handleMe(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// GET /v1/auth/oidc/providers — list configured OIDC providers.
+func (s *Services) handleOIDCProviders(w http.ResponseWriter, r *http.Request) {
+	if s.OIDCMgr == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"providers": []string{}})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"providers": s.OIDCMgr.Providers()})
+}
+
+// GET /v1/auth/oidc/{provider} — redirect to provider's authorization URL.
+func (s *Services) handleOIDCRedirect(w http.ResponseWriter, r *http.Request) {
+	provider := r.PathValue("provider")
+	if s.OIDCMgr == nil || !s.OIDCMgr.HasProvider(provider) {
+		writeError(w, http.StatusNotFound, "unknown OIDC provider")
+		return
+	}
+
+	authURL, _, err := s.OIDCMgr.AuthURL(provider)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to generate auth URL")
+		return
+	}
+
+	http.Redirect(w, r, authURL, http.StatusFound)
+}
+
+// GET /v1/auth/oidc/{provider}/callback — handle OIDC callback, issue tokens.
+func (s *Services) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
+	provider := r.PathValue("provider")
+	if s.OIDCMgr == nil || !s.OIDCMgr.HasProvider(provider) {
+		writeError(w, http.StatusNotFound, "unknown OIDC provider")
+		return
+	}
+
+	code := r.URL.Query().Get("code")
+	state := r.URL.Query().Get("state")
+	if code == "" || state == "" {
+		writeError(w, http.StatusBadRequest, "missing code or state parameter")
+		return
+	}
+
+	claims, err := s.OIDCMgr.Exchange(r.Context(), provider, code, state)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "OIDC authentication failed: "+err.Error())
+		return
+	}
+
+	pair, user, err := s.Auth.LoginOIDC(r.Context(), claims)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "login failed: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, tokenResponse(pair, user.ID, user.Email, user.DisplayName))
+}
+
 // tokenResponse builds the standard auth response body.
 func tokenResponse(pair *auth.TokenPair, userID, email, displayName string) map[string]any {
 	return map[string]any{

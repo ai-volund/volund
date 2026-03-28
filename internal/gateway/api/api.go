@@ -3,13 +3,35 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 
 	"github.com/ai-volund/volund/internal/auth"
+	"github.com/ai-volund/volund/internal/credentials"
 	"github.com/ai-volund/volund/internal/db"
+	"github.com/ai-volund/volund/internal/dispatch"
 )
+
+// ClaimResult holds the result of a pod claim.
+type ClaimResult struct {
+	InstanceID string // DB UUID — used for task tracking
+	PodName    string // K8s pod name — used as NATS dispatch subject
+}
+
+// InstanceClaimer manages pod claim/release for conversations.
+// Satisfied by *gateway.ClaimManager; kept as an interface to avoid circular deps.
+type InstanceClaimer interface {
+	EnsureInstance(ctx context.Context, convID, tenantID, profileID string) (*ClaimResult, error)
+	Release(ctx context.Context, convID string) error
+}
+
+// ProfileResolver resolves an agent profile's configuration and skills
+// for inclusion in the task dispatch payload.
+type ProfileResolver interface {
+	ResolveProfile(ctx context.Context, profileName string) (*dispatch.ProfileConfig, []dispatch.SkillSpec, error)
+}
 
 // Services holds all dependencies the API handlers need.
 type Services struct {
@@ -20,6 +42,26 @@ type Services struct {
 	Agents  *db.AgentRepo
 	Convos  *db.ConversationRepo
 	Invites *db.InviteRepo
+	Skills      *db.SkillRepo
+	Memories    *db.MemoryRepo
+	Tasks       *db.TaskRepo
+	Credentials *db.CredentialRepo
+	CredBroker  *credentials.Broker
+	// EmbedFn generates embeddings via the LLM router. nil = embeddings unavailable.
+	EmbedFn func(ctx context.Context, texts []string) ([][]float32, error)
+
+	// Dispatcher publishes tasks to the agent pool via NATS.
+	Dispatcher *dispatch.Dispatcher
+	// DispatchFn is the gateway callback for dispatching a task (sets routing table).
+	DispatchFn func(ctx context.Context, task *dispatch.Task) error
+	// ClaimMgr manages pod claim/release. nil when DB is not configured.
+	ClaimMgr InstanceClaimer
+	// ProfileResolver resolves profile config + skills. nil = no profile resolution.
+	ProfileResolver ProfileResolver
+	// Usage tracks token usage. nil = usage tracking disabled.
+	Usage *db.UsageRepo
+	// OIDCMgr manages OIDC SSO providers. nil = OIDC disabled.
+	OIDCMgr *auth.OIDCManager
 }
 
 // Register mounts all API routes on mux under /v1/.
@@ -30,6 +72,11 @@ func Register(mux *http.ServeMux, svc *Services) {
 	mux.HandleFunc("POST /v1/auth/refresh", svc.handleRefresh)
 	mux.HandleFunc("POST /v1/auth/logout", svc.handleLogout)
 	mux.HandleFunc("GET /v1/auth/me", RequireAuth(svc.handleMe))
+
+	// OIDC SSO
+	mux.HandleFunc("GET /v1/auth/oidc/providers", svc.handleOIDCProviders)
+	mux.HandleFunc("GET /v1/auth/oidc/{provider}", svc.handleOIDCRedirect)
+	mux.HandleFunc("GET /v1/auth/oidc/{provider}/callback", svc.handleOIDCCallback)
 
 	// Tenants
 	mux.HandleFunc("POST /v1/tenants", RequireAuth(svc.handleCreateTenant))
@@ -54,8 +101,38 @@ func Register(mux *http.ServeMux, svc *Services) {
 	mux.HandleFunc("POST /v1/conversations", RequireAuth(svc.handleCreateConversation))
 	mux.HandleFunc("GET /v1/conversations", RequireAuth(svc.handleListConversations))
 	mux.HandleFunc("GET /v1/conversations/{id}", RequireAuth(svc.handleGetConversation))
+	mux.HandleFunc("PATCH /v1/conversations/{id}", RequireAuth(svc.handleUpdateConversation))
 	mux.HandleFunc("DELETE /v1/conversations/{id}", RequireAuth(svc.handleDeleteConversation))
 	mux.HandleFunc("POST /v1/conversations/{id}/messages", RequireAuth(svc.handlePostMessage))
+
+	// Tasks
+	mux.HandleFunc("GET /v1/tasks", RequireAuth(svc.handleListTasks))
+	mux.HandleFunc("GET /v1/tasks/{id}", RequireAuth(svc.handleGetTask))
+	mux.HandleFunc("POST /v1/tasks/{id}/cancel", RequireAuth(svc.handleCancelTask))
+
+	// Forge registry — skill catalog (public read, auth required for write)
+	mux.HandleFunc("GET /v1/forge/skills", svc.handleListSkills)
+	mux.HandleFunc("GET /v1/forge/skills/{id}", svc.handleGetSkill)
+	mux.HandleFunc("POST /v1/forge/skills", RequireAuth(svc.handlePublishSkill))
+	mux.HandleFunc("PUT /v1/forge/skills/{id}", RequireAuth(svc.handleUpdateSkill))
+	mux.HandleFunc("DELETE /v1/forge/skills/{id}", RequireAuth(svc.handleDeleteSkill))
+
+	// Memory — long-term memory with pgvector embeddings
+	mux.HandleFunc("POST /v1/memory", RequireAuth(svc.handleStoreMemory))
+	mux.HandleFunc("POST /v1/memory/search", RequireAuth(svc.handleSearchMemory))
+	mux.HandleFunc("GET /v1/memory", RequireAuth(svc.handleListMemories))
+	mux.HandleFunc("DELETE /v1/memory/{id}", RequireAuth(svc.handleDeleteMemory))
+
+	// Usage tracking
+	mux.HandleFunc("GET /v1/usage/summary", RequireAuth(svc.handleUsageSummary))
+	mux.HandleFunc("GET /v1/usage/conversations/{id}", RequireAuth(svc.handleUsageByConversation))
+
+	// Credential broker — per-user credential management + agent token issuance
+	mux.HandleFunc("POST /v1/credentials", RequireAuth(svc.handleStoreCredential))
+	mux.HandleFunc("GET /v1/credentials", RequireAuth(svc.handleListCredentials))
+	mux.HandleFunc("DELETE /v1/credentials/{provider}", RequireAuth(svc.handleDeleteCredential))
+	mux.HandleFunc("POST /v1/credentials/token", RequireAuth(svc.handleIssueToken))
+	mux.HandleFunc("GET /v1/credentials/audit", RequireAuth(svc.handleCredentialAudit))
 }
 
 // RequireAuth wraps a handler to require a valid JWT; returns 401 if missing.

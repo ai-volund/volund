@@ -1,0 +1,98 @@
+# Volund Gateway values
+
+replicaCount: 2
+
+image:
+  repository: ghcr.io/ai-volund/volund
+  tag: ""  # defaults to Chart.appVersion
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+service:
+  type: ClusterIP
+  httpPort: 8080
+  grpcPort: 9090
+
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: volund.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+    # - secretName: volund-tls
+    #   hosts:
+    #     - volund.example.com
+
+# Gateway config
+gateway:
+  httpAddr: ":8080"
+  grpcAddr: ":9090"
+  jwtSecret: ""  # REQUIRED — set via secret
+  credentialEncryptionKey: ""
+  skillConfigPath: "/etc/volund/skills.yaml"
+
+# Database
+database:
+  # Use external URL or the bundled PostgreSQL subchart.
+  url: ""  # e.g. postgres://user:pass@host:5432/volund?sslmode=require
+  # If url is empty and postgresql.enabled is true, connects to subchart.
+
+# NATS
+nats:
+  url: ""  # e.g. nats://nats:4222
+
+# OpenTelemetry
+otel:
+  enabled: false
+  endpoint: ""  # e.g. otel-collector:4317
+
+# OIDC SSO
+oidc:
+  providers: ""  # JSON array of OIDCProviderConfig
+
+# Environment
+environment: prod
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Bundled PostgreSQL (via Bitnami subchart or CloudNativePG)
+postgresql:
+  enabled: false
+
+# Network Policies
+networkPolicy:
+  enabled: false
+  # Default deny-all ingress/egress in the release namespace
+  defaultDeny: true
+  # Allow inbound from agent pods to gateway ports
+  allowAgentIngress: true
+  agentPodSelector:
+    app.kubernetes.io/name: volund-agent
+
+# Resource Quotas (applied to the release namespace)
+resourceQuota:
+  enabled: false
+  hard:
+    pods: "50"
+    requests.cpu: "10"
+    requests.memory: "20Gi"
+    limits.cpu: "20"
+    limits.memory: "40Gi"
+    persistentvolumeclaims: "10"
+    requests.storage: "100Gi"

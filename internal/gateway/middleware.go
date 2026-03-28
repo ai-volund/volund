@@ -1,13 +1,18 @@
 package gateway
 
 import (
+	"bufio"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"runtime/debug"
 	"time"
 )
 
 // responseWriter wraps http.ResponseWriter to capture the status code.
+// It also implements http.Hijacker so WebSocket upgrades work through
+// the middleware chain.
 type responseWriter struct {
 	http.ResponseWriter
 	statusCode int
@@ -20,6 +25,21 @@ func newResponseWriter(w http.ResponseWriter) *responseWriter {
 func (rw *responseWriter) WriteHeader(code int) {
 	rw.statusCode = code
 	rw.ResponseWriter.WriteHeader(code)
+}
+
+// Hijack forwards to the underlying ResponseWriter so websocket.Accept works.
+func (rw *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if hj, ok := rw.ResponseWriter.(http.Hijacker); ok {
+		return hj.Hijack()
+	}
+	return nil, nil, fmt.Errorf("underlying ResponseWriter does not implement http.Hijacker")
+}
+
+// Flush forwards to the underlying ResponseWriter if it supports it.
+func (rw *responseWriter) Flush() {
+	if f, ok := rw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 // LoggingMiddleware logs one line per request with method, path, status, and duration.

@@ -1,0 +1,73 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- if .Values.networkPolicy.defaultDeny }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "volund.fullname" . }}-default-deny
+  labels:
+    {{- include "volund.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+{{- end }}
+---
+# Allow gateway pods to receive traffic and reach required services.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "volund.fullname" . }}-gateway
+  labels:
+    {{- include "volund.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "volund.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow inbound from ingress controllers (any namespace)
+    - ports:
+        - port: {{ .Values.service.httpPort }}
+          protocol: TCP
+        - port: {{ .Values.service.grpcPort }}
+          protocol: TCP
+    {{- if .Values.networkPolicy.allowAgentIngress }}
+    # Allow inbound from agent pods
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.agentPodSelector | nindent 14 }}
+      ports:
+        - port: {{ .Values.service.httpPort }}
+          protocol: TCP
+        - port: {{ .Values.service.grpcPort }}
+          protocol: TCP
+    {{- end }}
+  egress:
+    # DNS
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # NATS
+    - ports:
+        - port: 4222
+          protocol: TCP
+    # PostgreSQL
+    - ports:
+        - port: 5432
+          protocol: TCP
+    # Redis
+    - ports:
+        - port: 6379
+          protocol: TCP
+    # OTel Collector (OTLP gRPC)
+    - ports:
+        - port: 4317
+          protocol: TCP
+{{- end }}

@@ -6,17 +6,27 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync"
 
+	"github.com/nats-io/nats.go"
+	promhttp "github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 
+	"encoding/json"
+
 	"github.com/ai-volund/volund/internal/auth"
 	"github.com/ai-volund/volund/internal/config"
+	"github.com/ai-volund/volund/internal/credentials"
 	"github.com/ai-volund/volund/internal/db"
+	"github.com/ai-volund/volund/internal/dispatch"
 	"github.com/ai-volund/volund/internal/gateway/api"
 	"github.com/ai-volund/volund/internal/llm"
+	"github.com/ai-volund/volund/internal/usage"
 
 	volundpb "github.com/ai-volund/volund-proto/gen/go/volund/v1"
 )
@@ -26,21 +36,119 @@ type Server struct {
 	cfg        *config.Config
 	router     *llm.Router
 	pool       *db.Pool
+	dispatcher *dispatch.Dispatcher
+	natsConn   *nats.Conn
+
+	// claimMgr manages pod claim/release and the conv→instance routing cache.
+	// nil when no DB pool is configured (gateway-only mode).
+	claimMgr *ClaimManager
+
+	// instanceSyncer watches agent heartbeats on NATS and syncs to DB.
+	instSyncer *instanceSyncer
+	// usageTracker subscribes to usage events on NATS and persists to DB.
+	usageTracker *usage.Tracker
+
+	// routingTable maps conversation_id → active agent instance_id.
+	// Kept as a fallback when claimMgr is nil.
+	routingTable map[string]string
+	routingMu    sync.RWMutex
+
 	httpServer *http.Server
 	grpcServer *grpc.Server
 }
 
 // New creates a new gateway Server.
 func New(cfg *config.Config, router *llm.Router, pool *db.Pool) *Server {
-	return &Server{cfg: cfg, router: router, pool: pool}
+	s := &Server{
+		cfg:    cfg,
+		router: router,
+		pool:   pool,
+	}
+	// Initialize the claim manager when a DB pool is available.
+	if pool != nil {
+		s.claimMgr = NewClaimManager(&agentRepoAdapter{repo: db.NewAgentRepo(pool)})
+	}
+	return s
+}
+
+// agentRepoAdapter wraps *db.AgentRepo to satisfy the AgentInstanceRepo
+// interface, converting db.AgentInstance → AgentInstanceInfo.
+type agentRepoAdapter struct {
+	repo *db.AgentRepo
+}
+
+func (a *agentRepoAdapter) ClaimInstance(ctx context.Context, tenantID, profileID string) (*AgentInstanceInfo, error) {
+	inst, err := a.repo.ClaimInstance(ctx, tenantID, profileID)
+	if err != nil {
+		return nil, err
+	}
+	if inst == nil {
+		return nil, nil
+	}
+	var pid string
+	if inst.ProfileID != nil {
+		pid = *inst.ProfileID
+	}
+	var podName string
+	if inst.PodName != nil {
+		podName = *inst.PodName
+	}
+	return &AgentInstanceInfo{
+		ID:        inst.ID,
+		PodName:   podName,
+		ProfileID: pid,
+		State:     inst.State,
+	}, nil
+}
+
+func (a *agentRepoAdapter) ReleaseInstance(ctx context.Context, id string) error {
+	return a.repo.ReleaseInstance(ctx, id)
 }
 
 // Start launches the HTTP and gRPC servers.
 func (s *Server) Start(ctx context.Context) error {
+	// Connect to NATS for WebSocket bridging.
+	if s.cfg.NATSUrl != "" {
+		conn, err := nats.Connect(s.cfg.NATSUrl)
+		if err != nil {
+			slog.Warn("gateway: NATS unavailable, WebSocket streaming disabled", "error", err)
+		} else {
+			s.natsConn = conn
+			slog.Info("gateway: connected to NATS", "url", s.cfg.NATSUrl)
+
+			// Start instance syncer — watches heartbeats and syncs warm pool pods to DB.
+			if s.pool != nil {
+				syncer, err := startInstanceSyncer(conn, db.NewAgentRepo(s.pool))
+				if err != nil {
+					slog.Warn("gateway: instance syncer failed to start", "error", err)
+				} else {
+					s.instSyncer = syncer
+				}
+
+				// Start usage tracker.
+				ut, err := usage.StartTracker(conn, db.NewUsageRepo(s.pool))
+				if err != nil {
+					slog.Warn("gateway: usage tracker failed to start", "error", err)
+				} else {
+					s.usageTracker = ut
+				}
+			}
+		}
+	}
+
+	// Connect dispatcher (publishes tasks to agent pool).
+	d, err := dispatch.Connect(s.cfg.NATSUrl)
+	if err != nil {
+		slog.Warn("gateway: task dispatcher unavailable", "error", err)
+	} else {
+		s.dispatcher = d
+	}
+
 	tm := auth.NewTokenManager(s.cfg.JWTSecret)
 
 	// --- gRPC server ---
 	s.grpcServer = grpc.NewServer(
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 		grpc.ChainUnaryInterceptor(auth.UnaryServerInterceptor(tm)),
 		grpc.ChainStreamInterceptor(auth.StreamServerInterceptor(tm)),
 	)
@@ -50,7 +158,6 @@ func (s *Server) Start(ctx context.Context) error {
 	healthSrv.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 	reflection.Register(s.grpcServer)
 
-	// Stub services on gRPC (full implementations live in the HTTP layer for now).
 	volundpb.RegisterAuthServiceServer(s.grpcServer, &volundpb.UnimplementedAuthServiceServer{})
 	volundpb.RegisterChatServiceServer(s.grpcServer, &volundpb.UnimplementedChatServiceServer{})
 	volundpb.RegisterForgeServiceServer(s.grpcServer, &volundpb.UnimplementedForgeServiceServer{})
@@ -76,19 +183,71 @@ func (s *Server) Start(ctx context.Context) error {
 		fmt.Fprint(w, `{"status":"ok"}`)
 	})
 
-	// WebSocket: real-time LLM streaming.
-	mux.HandleFunc("/ws/chat", s.handleChat)
+	// WebSocket: real-time agent stream bridge.
+	mux.HandleFunc("GET /ws/conv/{id}", s.handleConvStream)
+	// Keep old path responding with a deprecation notice.
+	mux.HandleFunc("/ws/chat", s.legacyHandleChat)
 
 	// REST API — only register if we have a DB pool.
+	// Skill resolver — reads skill config to include in task dispatches.
+	profileResolver := NewStaticProfileResolver(s.cfg.SkillConfigPath)
+
 	if s.pool != nil {
+		credRepo := db.NewCredentialRepo(s.pool)
+		var credBroker *credentials.Broker
+		if s.cfg.CredentialEncryptionKey != "" {
+			var err error
+			credBroker, err = credentials.NewBroker(credRepo, s.cfg.CredentialEncryptionKey)
+			if err != nil {
+				slog.Warn("credential broker disabled", "error", err)
+			} else {
+				slog.Info("credential broker enabled")
+			}
+		}
+
+		// Embedding function for memory — routes through the LLM router.
+		embedFn := func(ctx context.Context, texts []string) ([][]float32, error) {
+			vecs, _, err := s.router.Embed(ctx, "", "text-embedding-3-small", texts)
+			return vecs, err
+		}
+
+		// Initialize OIDC manager if configured.
+		var oidcMgr *auth.OIDCManager
+		if s.cfg.OIDCProviders != "" {
+			var providers []auth.OIDCProviderConfig
+			if err := json.Unmarshal([]byte(s.cfg.OIDCProviders), &providers); err != nil {
+				slog.Warn("failed to parse OIDC providers config", "error", err)
+			} else if len(providers) > 0 {
+				mgr, err := auth.NewOIDCManager(ctx, providers)
+				if err != nil {
+					slog.Warn("OIDC provider discovery failed", "error", err)
+				} else {
+					oidcMgr = mgr
+					slog.Info("OIDC SSO enabled", "providers", mgr.Providers())
+				}
+			}
+		}
+
 		svc := &api.Services{
-			Auth:    auth.NewService(tm, db.NewUserRepo(s.pool), db.NewTenantRepo(s.pool), db.NewRefreshTokenRepo(s.pool)),
-			TM:      tm,
-			Users:   db.NewUserRepo(s.pool),
-			Tenants: db.NewTenantRepo(s.pool),
-			Agents:  db.NewAgentRepo(s.pool),
-			Convos:  db.NewConversationRepo(s.pool),
-			Invites: db.NewInviteRepo(s.pool),
+			Auth:            auth.NewService(tm, db.NewUserRepo(s.pool), db.NewTenantRepo(s.pool), db.NewRefreshTokenRepo(s.pool)),
+			TM:              tm,
+			Users:           db.NewUserRepo(s.pool),
+			Tenants:         db.NewTenantRepo(s.pool),
+			Agents:          db.NewAgentRepo(s.pool),
+			Convos:          db.NewConversationRepo(s.pool),
+			Invites:         db.NewInviteRepo(s.pool),
+			Dispatcher:      s.dispatcher,
+			DispatchFn:      s.dispatchTask,
+			ClaimMgr:        s.claimMgr,
+			Tasks:           db.NewTaskRepo(s.pool),
+			Skills:          db.NewSkillRepo(s.pool),
+			Memories:        db.NewMemoryRepo(s.pool),
+			Credentials:     credRepo,
+			CredBroker:      credBroker,
+			EmbedFn:         embedFn,
+			Usage:           db.NewUsageRepo(s.pool),
+			ProfileResolver: profileResolver,
+			OIDCMgr:         oidcMgr,
 		}
 		api.Register(mux, svc)
 		slog.Info("REST API routes registered")
@@ -96,10 +255,15 @@ func (s *Server) Start(ctx context.Context) error {
 		slog.Warn("no database pool — REST API routes not registered")
 	}
 
+	// Prometheus metrics endpoint.
+	mux.Handle("GET /metrics", promhttp.Handler())
+
 	handler := RecoveryMiddleware(
 		CORSMiddleware(
 			LoggingMiddleware(
-				auth.HTTPMiddleware(tm, mux),
+				otelhttp.NewMiddleware("volund-gateway")(
+					auth.HTTPMiddleware(tm, mux),
+				),
 			),
 		),
 	)
@@ -119,6 +283,33 @@ func (s *Server) Start(ctx context.Context) error {
 	return nil
 }
 
+// dispatchTask is the callback passed to API handlers so they can dispatch
+// without importing the gateway package (avoiding circular deps).
+func (s *Server) dispatchTask(ctx context.Context, task *dispatch.Task) error {
+	if s.dispatcher == nil {
+		return fmt.Errorf("dispatcher not available")
+	}
+
+	// If the task already has a claimed instance, dispatch directly to it.
+	if task.InstanceID != "" {
+		if err := s.dispatcher.DispatchToInstance(ctx, task, task.InstanceID); err != nil {
+			return err
+		}
+	} else {
+		// Fall back to pool dispatch.
+		if err := s.dispatcher.Dispatch(ctx, task); err != nil {
+			return err
+		}
+	}
+
+	// Start watching the conv stream. The watcher will update the routing table
+	// when the agent emits agent_start (with its instance_id) and clear it on agent_end.
+	if task.ConversationID != "" {
+		go s.watchConvStream(ctx, task.ConversationID, task.DBTaskID)
+	}
+	return nil
+}
+
 // Stop gracefully shuts down both servers.
 func (s *Server) Stop(ctx context.Context) {
 	if s.httpServer != nil {
@@ -130,5 +321,17 @@ func (s *Server) Stop(ctx context.Context) {
 	if s.grpcServer != nil {
 		slog.Info("shutting down gateway gRPC server")
 		s.grpcServer.GracefulStop()
+	}
+	if s.instSyncer != nil {
+		s.instSyncer.Close()
+	}
+	if s.usageTracker != nil {
+		s.usageTracker.Close()
+	}
+	if s.dispatcher != nil {
+		s.dispatcher.Close()
+	}
+	if s.natsConn != nil {
+		s.natsConn.Drain() //nolint:errcheck
 	}
 }

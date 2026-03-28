@@ -19,11 +19,13 @@ k8s_resource('nats',     port_forwards=['4222:4222', '8222:8222'], labels=['infr
 
 docker_build(
     'ghcr.io/ai-volund/volund',
-    context='volund',
+    context='.',
     dockerfile='volund/Dockerfile',
     live_update=[
-        sync('volund', '/src'),
-        run('cd /src && go build -o /bin/volund ./cmd/volund', trigger=['volund/**/*.go']),
+        sync('volund', '/workspace/volund'),
+        sync('volund-proto', '/workspace/volund-proto'),
+        run('cd /workspace/volund && go build -o /bin/volund ./cmd/volund',
+            trigger=['volund/**/*.go', 'volund-proto/**/*.go']),
         restart_container(),
     ],
 )
@@ -40,16 +42,25 @@ k8s_resource(
 
 docker_build(
     'ghcr.io/ai-volund/volund-agent',
-    context='volund-agent',
+    context='.',
     dockerfile='volund-agent/Dockerfile',
     live_update=[
-        sync('volund-agent', '/src'),
-        run('cd /src && go build -o /bin/volund-agent ./cmd/agent', trigger=['volund-agent/**/*.go']),
+        sync('volund-agent', '/workspace/volund-agent'),
+        sync('volund-proto', '/workspace/volund-proto'),
+        run('cd /workspace/volund-agent && go build -o /bin/volund-agent ./cmd/agent',
+            trigger=['volund-agent/**/*.go', 'volund-proto/**/*.go']),
         restart_container(),
     ],
 )
 
-# Agent pods are managed by the operator; no static k8s_yaml here.
+# Static agent deployment for local dev (profile: default-orchestrator).
+# In production, agent pods are managed by the operator via AgentWarmPool CRs.
+k8s_yaml('volund/deploy/local/agent.yaml')
+k8s_resource(
+    'volund-agent',
+    resource_deps=['nats', 'volund'],
+    labels=['agent'],
+)
 
 # ── volund-operator ───────────────────────────────────────────────────────────
 

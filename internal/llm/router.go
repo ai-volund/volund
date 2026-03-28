@@ -4,20 +4,27 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"sync"
 )
 
 // Router manages LLM providers and routes requests to the right one.
+// It supports fallback chains (try A, then B on failure) and circuit breakers
+// (stop sending to a consistently failing provider).
 type Router struct {
 	mu              sync.RWMutex
 	providers       map[string]Provider
+	circuits        map[string]*CircuitBreaker
+	fallbackChains  map[string][]string // provider name → ordered fallback list
 	defaultProvider string
 }
 
 // NewRouter creates a new Router with no providers registered.
 func NewRouter() *Router {
 	return &Router{
-		providers: make(map[string]Provider),
+		providers:      make(map[string]Provider),
+		circuits:       make(map[string]*CircuitBreaker),
+		fallbackChains: make(map[string][]string),
 	}
 }
 
@@ -26,9 +33,19 @@ func (r *Router) Register(p Provider) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.providers[p.Name()] = p
+	r.circuits[p.Name()] = NewCircuitBreaker()
 	if r.defaultProvider == "" {
 		r.defaultProvider = p.Name()
 	}
+}
+
+// SetFallbackChain configures fallback providers for a given primary provider.
+// Example: SetFallbackChain("anthropic", "openai", "ollama") — if Anthropic
+// fails, try OpenAI, then Ollama.
+func (r *Router) SetFallbackChain(primary string, fallbacks ...string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.fallbackChains[primary] = fallbacks
 }
 
 func (r *Router) get(name string) (Provider, error) {
@@ -47,31 +64,139 @@ func (r *Router) get(name string) (Provider, error) {
 	return p, nil
 }
 
-// Chat routes a non-streaming chat request to the appropriate provider.
-func (r *Router) Chat(ctx context.Context, providerName string, req *ProviderRequest) (*ProviderResponse, error) {
-	p, err := r.get(providerName)
-	if err != nil {
-		return nil, err
+// getWithFallbacks returns the provider chain: primary + fallbacks.
+func (r *Router) getWithFallbacks(name string) ([]Provider, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if name == "" {
+		name = r.defaultProvider
 	}
-	return p.Chat(ctx, req)
+	if name == "" {
+		return nil, fmt.Errorf("no LLM providers configured")
+	}
+
+	primary, ok := r.providers[name]
+	if !ok {
+		return nil, fmt.Errorf("unknown LLM provider %q", name)
+	}
+
+	chain := []Provider{primary}
+	if fallbacks, ok := r.fallbackChains[name]; ok {
+		for _, fb := range fallbacks {
+			if p, ok := r.providers[fb]; ok {
+				chain = append(chain, p)
+			}
+		}
+	}
+	return chain, nil
 }
 
-// StreamChat routes a streaming chat request to the appropriate provider.
-func (r *Router) StreamChat(ctx context.Context, providerName string, req *ProviderRequest) (Stream, error) {
-	p, err := r.get(providerName)
+func (r *Router) circuit(name string) *CircuitBreaker {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.circuits[name]
+}
+
+// Chat routes a non-streaming chat request with fallback + circuit breaker support.
+func (r *Router) Chat(ctx context.Context, providerName string, req *ProviderRequest) (*ProviderResponse, error) {
+	chain, err := r.getWithFallbacks(providerName)
 	if err != nil {
 		return nil, err
 	}
-	return p.StreamChat(ctx, req)
+
+	var lastErr error
+	for _, p := range chain {
+		cb := r.circuit(p.Name())
+		if cb != nil && !cb.Allow() {
+			slog.Debug("circuit open, skipping provider", "provider", p.Name())
+			lastErr = fmt.Errorf("provider %q circuit open", p.Name())
+			continue
+		}
+
+		resp, err := p.Chat(ctx, req)
+		if err != nil {
+			if cb != nil {
+				cb.RecordFailure()
+			}
+			slog.Warn("provider failed, trying fallback", "provider", p.Name(), "error", err)
+			lastErr = err
+			continue
+		}
+
+		if cb != nil {
+			cb.RecordSuccess()
+		}
+		return resp, nil
+	}
+
+	return nil, fmt.Errorf("all providers failed: %w", lastErr)
+}
+
+// StreamChat routes a streaming chat request with fallback + circuit breaker support.
+func (r *Router) StreamChat(ctx context.Context, providerName string, req *ProviderRequest) (Stream, error) {
+	chain, err := r.getWithFallbacks(providerName)
+	if err != nil {
+		return nil, err
+	}
+
+	var lastErr error
+	for _, p := range chain {
+		cb := r.circuit(p.Name())
+		if cb != nil && !cb.Allow() {
+			lastErr = fmt.Errorf("provider %q circuit open", p.Name())
+			continue
+		}
+
+		s, err := p.StreamChat(ctx, req)
+		if err != nil {
+			if cb != nil {
+				cb.RecordFailure()
+			}
+			slog.Warn("stream provider failed, trying fallback", "provider", p.Name(), "error", err)
+			lastErr = err
+			continue
+		}
+
+		if cb != nil {
+			cb.RecordSuccess()
+		}
+		return s, nil
+	}
+
+	return nil, fmt.Errorf("all providers failed: %w", lastErr)
 }
 
 // Embed routes an embedding request to the appropriate provider.
 func (r *Router) Embed(ctx context.Context, providerName, model string, texts []string) ([][]float32, *Usage, error) {
-	p, err := r.get(providerName)
+	chain, err := r.getWithFallbacks(providerName)
 	if err != nil {
 		return nil, nil, err
 	}
-	return p.Embed(ctx, model, texts)
+
+	var lastErr error
+	for _, p := range chain {
+		cb := r.circuit(p.Name())
+		if cb != nil && !cb.Allow() {
+			lastErr = fmt.Errorf("provider %q circuit open", p.Name())
+			continue
+		}
+
+		vecs, usage, err := p.Embed(ctx, model, texts)
+		if err != nil {
+			if cb != nil {
+				cb.RecordFailure()
+			}
+			lastErr = err
+			continue
+		}
+		if cb != nil {
+			cb.RecordSuccess()
+		}
+		return vecs, usage, nil
+	}
+
+	return nil, nil, fmt.Errorf("all providers failed: %w", lastErr)
 }
 
 // Respond routes a Responses API request. Providers that implement
@@ -84,7 +209,7 @@ func (r *Router) Respond(ctx context.Context, providerName string, req *Response
 	if rp, ok := p.(ResponderProvider); ok {
 		return rp.Respond(ctx, req)
 	}
-	resp, err := p.Chat(ctx, responseToChat(req))
+	resp, err := r.Chat(ctx, providerName, responseToChat(req))
 	if err != nil {
 		return nil, err
 	}
@@ -100,7 +225,7 @@ func (r *Router) StreamRespond(ctx context.Context, providerName string, req *Re
 	if rp, ok := p.(ResponderProvider); ok {
 		return rp.StreamRespond(ctx, req)
 	}
-	s, err := p.StreamChat(ctx, responseToChat(req))
+	s, err := r.StreamChat(ctx, providerName, responseToChat(req))
 	if err != nil {
 		return nil, err
 	}
@@ -135,6 +260,17 @@ func (r *Router) Providers() []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+// ProviderHealth returns the circuit breaker state for each provider.
+func (r *Router) ProviderHealth() map[string]CircuitState {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	health := make(map[string]CircuitState, len(r.circuits))
+	for name, cb := range r.circuits {
+		health[name] = cb.State()
+	}
+	return health
 }
 
 // responseToChat converts a ResponseRequest to a ProviderRequest for fallback.

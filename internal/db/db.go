@@ -22,6 +22,10 @@ type Pool struct {
 	*pgxpool.Pool
 }
 
+// WrapPool wraps an existing pgxpool.Pool for use with Volund repos.
+// Useful for tests that manage their own pool lifecycle.
+func WrapPool(p *pgxpool.Pool) *Pool { return &Pool{p} }
+
 // Connect creates a connection pool and verifies connectivity.
 func Connect(ctx context.Context, dsn string) (*Pool, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)

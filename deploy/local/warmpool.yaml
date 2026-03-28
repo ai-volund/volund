@@ -5,7 +5,8 @@ metadata:
   namespace: default
 spec:
   replicas: 2
-  tenantId: dev-tenant
+  tenantId: "6295b36d-30e9-48f0-935d-7b6d565d5360"
+  profileId: default-orchestrator
   image: ghcr.io/ai-volund/volund-agent:latest
   llmRouterAddr: volund:9091
   natsUrl: nats://nats:4222

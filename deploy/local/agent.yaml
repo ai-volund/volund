@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: volund-agent
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: volund-agent
+  template:
+    metadata:
+      labels:
+        app: volund-agent
+        volund.ai/pool: default-pool
+        volund.ai/tenant: dev-tenant
+    spec:
+      containers:
+        - name: agent
+          image: ghcr.io/ai-volund/volund-agent
+          env:
+            - name: VOLUND_INSTANCE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: VOLUND_PROFILE
+              value: default-orchestrator
+            - name: VOLUND_PROFILE_TYPE
+              value: orchestrator
+            - name: VOLUND_NATS_URL
+              value: nats://nats:4222
+            - name: VOLUND_LLM_ROUTER_ADDR
+              value: volund:9091
+            - name: VOLUND_TENANT_ID
+              value: "6295b36d-30e9-48f0-935d-7b6d565d5360"
+            - name: VOLUND_PROVIDER
+              value: openai
+            - name: VOLUND_MODEL
+              value: gpt-oss-120b
+            - name: VOLUND_MAX_TOKENS
+              value: "8192"
+            - name: VOLUND_MAX_TOOL_ROUNDS
+              value: "10"
+            - name: VOLUND_OTLP_ENDPOINT
+              value: otel-collector:4317
+            - name: VOLUND_SYSTEM_PROMPT
+              value: "You are a helpful AI assistant."

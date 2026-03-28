@@ -1,0 +1,97 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "volund.fullname" . }}
+  labels:
+    {{- include "volund.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "volund.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "volund.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: volund
+          image: "{{ .Values.image.repository }}:{{ include "volund.imageTag" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.httpPort }}
+              protocol: TCP
+            - name: grpc
+              containerPort: {{ .Values.service.grpcPort }}
+              protocol: TCP
+          env:
+            - name: VOLUND_GATEWAY_HTTP_ADDR
+              value: ":{{ .Values.service.httpPort }}"
+            - name: VOLUND_GATEWAY_GRPC_ADDR
+              value: ":{{ .Values.service.grpcPort }}"
+            - name: VOLUND_ENV
+              value: {{ .Values.environment | quote }}
+            {{- if .Values.database.url }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "volund.fullname" . }}-secrets
+                  key: database-url
+            {{- end }}
+            {{- if .Values.nats.url }}
+            - name: VOLUND_NATS_URL
+              value: {{ .Values.nats.url | quote }}
+            {{- end }}
+            {{- if .Values.otel.enabled }}
+            - name: VOLUND_OTLP_ENDPOINT
+              value: {{ .Values.otel.endpoint | quote }}
+            {{- end }}
+            {{- if .Values.oidc.providers }}
+            - name: VOLUND_OIDC_PROVIDERS
+              value: {{ .Values.oidc.providers | quote }}
+            {{- end }}
+            - name: VOLUND_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "volund.fullname" . }}-secrets
+                  key: jwt-secret
+            {{- if .Values.gateway.credentialEncryptionKey }}
+            - name: VOLUND_CREDENTIAL_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "volund.fullname" . }}-secrets
+                  key: credential-encryption-key
+            {{- end }}
+            - name: VOLUND_SKILL_CONFIG_PATH
+              value: {{ .Values.gateway.skillConfigPath | quote }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

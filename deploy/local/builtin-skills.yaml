@@ -1,0 +1,66 @@
+---
+# Built-in skills are compiled into the agent binary and always available.
+# These CRDs exist so they appear in the Forge registry for discoverability.
+# They use type: prompt with no prompt body — the agent recognizes them by name
+# and uses the compiled implementation.
+apiVersion: volund.ai/v1alpha1
+kind: Skill
+metadata:
+  name: run-code
+  namespace: default
+spec:
+  type: prompt
+  version: "1.0.0"
+  description: "Execute Python 3 or Bash code snippets in a sandboxed environment. Returns stdout, stderr, and exit code."
+  author: "volund"
+  tags:
+    - builtin
+    - code-execution
+    - sandbox
+  prompt: ""
+---
+apiVersion: volund.ai/v1alpha1
+kind: Skill
+metadata:
+  name: web-search
+  namespace: default
+spec:
+  type: prompt
+  version: "1.0.0"
+  description: "Search the web using a search engine API. Returns a list of results with titles, URLs, and snippets."
+  author: "volund"
+  tags:
+    - builtin
+    - search
+    - web
+  prompt: ""
+---
+apiVersion: volund.ai/v1alpha1
+kind: Skill
+metadata:
+  name: read-memory
+  namespace: default
+spec:
+  type: prompt
+  version: "1.0.0"
+  description: "Read from the agent's long-term memory store. Retrieve previously stored facts, context, or conversation summaries."
+  author: "volund"
+  tags:
+    - builtin
+    - memory
+  prompt: ""
+---
+apiVersion: volund.ai/v1alpha1
+kind: Skill
+metadata:
+  name: write-memory
+  namespace: default
+spec:
+  type: prompt
+  version: "1.0.0"
+  description: "Write to the agent's long-term memory store. Persist facts, context, or summaries for future conversations."
+  author: "volund"
+  tags:
+    - builtin
+    - memory
+  prompt: ""
