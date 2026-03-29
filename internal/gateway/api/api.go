@@ -12,6 +12,7 @@ import (
 	"github.com/ai-volund/volund/internal/credentials"
 	"github.com/ai-volund/volund/internal/db"
 	"github.com/ai-volund/volund/internal/dispatch"
+	"github.com/ai-volund/volund/internal/storage"
 )
 
 // ClaimResult holds the result of a pod claim.
@@ -60,8 +61,16 @@ type Services struct {
 	ProfileResolver ProfileResolver
 	// Usage tracks token usage. nil = usage tracking disabled.
 	Usage *db.UsageRepo
+	// Quotas tracks tenant quotas. nil = quotas disabled (unlimited).
+	Quotas *db.QuotaRepo
 	// OIDCMgr manages OIDC SSO providers. nil = OIDC disabled.
 	OIDCMgr *auth.OIDCManager
+	// Attachments manages file attachment records. nil = uploads disabled.
+	Attachments *db.AttachmentRepo
+	// Store is the object storage backend for file attachments. nil = uploads disabled.
+	Store storage.Store
+	// MaxUploadSize is the maximum file upload size in bytes.
+	MaxUploadSize int64
 }
 
 // Register mounts all API routes on mux under /v1/.
@@ -104,6 +113,9 @@ func Register(mux *http.ServeMux, svc *Services) {
 	mux.HandleFunc("PATCH /v1/conversations/{id}", RequireAuth(svc.handleUpdateConversation))
 	mux.HandleFunc("DELETE /v1/conversations/{id}", RequireAuth(svc.handleDeleteConversation))
 	mux.HandleFunc("POST /v1/conversations/{id}/messages", RequireAuth(svc.handlePostMessage))
+	mux.HandleFunc("POST /v1/conversations/{id}/attachments", RequireAuth(svc.handleUploadAttachment))
+	mux.HandleFunc("GET /v1/conversations/{id}/attachments", RequireAuth(svc.handleListAttachments))
+	mux.HandleFunc("GET /v1/attachments/{id}", RequireAuth(svc.handleGetAttachment))
 
 	// Tasks
 	mux.HandleFunc("GET /v1/tasks", RequireAuth(svc.handleListTasks))
@@ -125,6 +137,8 @@ func Register(mux *http.ServeMux, svc *Services) {
 
 	// Usage tracking
 	mux.HandleFunc("GET /v1/usage/summary", RequireAuth(svc.handleUsageSummary))
+	mux.HandleFunc("GET /v1/usage/breakdown", RequireAuth(svc.handleUsageBreakdown))
+	mux.HandleFunc("GET /v1/usage/quota", RequireAuth(svc.handleQuotaStatus))
 	mux.HandleFunc("GET /v1/usage/conversations/{id}", RequireAuth(svc.handleUsageByConversation))
 
 	// Credential broker — per-user credential management + agent token issuance

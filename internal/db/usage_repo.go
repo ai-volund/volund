@@ -66,6 +66,45 @@ func (r *UsageRepo) SummaryByTenant(ctx context.Context, tenantID string, from, 
 	return &s, nil
 }
 
+// ModelBreakdown holds per-model usage totals.
+type ModelBreakdown struct {
+	Provider     string  `json:"provider"`
+	Model        string  `json:"model"`
+	InputTokens  int     `json:"input_tokens"`
+	OutputTokens int     `json:"output_tokens"`
+	TotalTokens  int     `json:"total_tokens"`
+	CostUSD      float64 `json:"cost_usd"`
+	EventCount   int     `json:"event_count"`
+}
+
+// BreakdownByModel returns per-model usage for a tenant within a time range.
+func (r *UsageRepo) BreakdownByModel(ctx context.Context, tenantID string, from, to time.Time) ([]ModelBreakdown, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT provider, model,
+		       COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
+		       COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cost_usd), 0), COUNT(*)
+		FROM usage_events
+		WHERE tenant_id = $1 AND created_at >= $2 AND created_at < $3
+		GROUP BY provider, model
+		ORDER BY SUM(total_tokens) DESC
+	`, tenantID, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("usage breakdown: %w", err)
+	}
+	defer rows.Close()
+
+	var result []ModelBreakdown
+	for rows.Next() {
+		var b ModelBreakdown
+		if err := rows.Scan(&b.Provider, &b.Model, &b.InputTokens, &b.OutputTokens,
+			&b.TotalTokens, &b.CostUSD, &b.EventCount); err != nil {
+			return nil, fmt.Errorf("scan breakdown: %w", err)
+		}
+		result = append(result, b)
+	}
+	return result, rows.Err()
+}
+
 // SummaryByConversation returns aggregated usage for a conversation.
 func (r *UsageRepo) SummaryByConversation(ctx context.Context, convID string) (*UsageSummary, error) {
 	var s UsageSummary

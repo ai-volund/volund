@@ -13,7 +13,9 @@ var (
 	DispatchTotal     metric.Int64Counter
 	DispatchDuration  metric.Float64Histogram
 	ClaimTotal        metric.Int64Counter
+	ClaimDuration     metric.Float64Histogram
 	ActiveInstances   metric.Int64UpDownCounter
+	WarmPoolSize      metric.Int64UpDownCounter
 	HTTPRequestTotal  metric.Int64Counter
 	HTTPRequestDur    metric.Float64Histogram
 )
@@ -40,8 +42,22 @@ func init() {
 		panic(err)
 	}
 
+	ClaimDuration, err = meter.Float64Histogram("volund.claim.duration_seconds",
+		metric.WithDescription("Time to claim a warm pool pod"),
+		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(0.01, 0.025, 0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1.0, 2.0, 5.0))
+	if err != nil {
+		panic(err)
+	}
+
 	ActiveInstances, err = meter.Int64UpDownCounter("volund.active_instances",
 		metric.WithDescription("Currently active agent instances"))
+	if err != nil {
+		panic(err)
+	}
+
+	WarmPoolSize, err = meter.Int64UpDownCounter("volund.warm_pool.size",
+		metric.WithDescription("Current warm pool size (pods available for claiming)"))
 	if err != nil {
 		panic(err)
 	}
@@ -78,7 +94,20 @@ func DispatchRecordAttrs(profile, method string) metric.RecordOption {
 	return metric.WithAttributeSet(dispatchAttrSet(profile, method))
 }
 
-// ClaimAttrs returns common metric attributes for claim operations.
+// ClaimAttrs returns common metric attributes for claim operations (counters).
 func ClaimAttrs(result string) metric.AddOption {
 	return metric.WithAttributes(attribute.String("result", result))
+}
+
+// ClaimRecordAttrs returns common metric attributes for claim duration recording (histograms).
+func ClaimRecordAttrs(result, path string) metric.RecordOption {
+	return metric.WithAttributes(
+		attribute.String("result", result),
+		attribute.String("path", path), // "cache_hit", "db_claim", "unavailable"
+	)
+}
+
+// WarmPoolAttrs returns common metric attributes for warm pool gauge.
+func WarmPoolAttrs(profile string) metric.AddOption {
+	return metric.WithAttributes(attribute.String("profile", profile))
 }

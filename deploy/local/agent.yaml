@@ -41,6 +41,8 @@ spec:
               value: "8192"
             - name: VOLUND_MAX_TOOL_ROUNDS
               value: "10"
+            - name: VOLUND_REDIS_ADDR
+              value: redis:6379
             - name: VOLUND_OTLP_ENDPOINT
               value: otel-collector:4317
             - name: VOLUND_SYSTEM_PROMPT

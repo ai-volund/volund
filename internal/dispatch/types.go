@@ -95,7 +95,7 @@ type Message struct {
 
 // Block is a single content block within a Message.
 type Block struct {
-	Type string `json:"type"` // "text" | "tool_use" | "tool_result"
+	Type string `json:"type"` // "text" | "tool_use" | "tool_result" | "attachment"
 
 	// text
 	Text string `json:"text,omitempty"`
@@ -108,6 +108,13 @@ type Block struct {
 	// tool_result
 	Content string `json:"content,omitempty"`
 	IsError bool   `json:"is_error,omitempty"`
+
+	// attachment (file upload)
+	AttachmentID string `json:"attachment_id,omitempty"`
+	URL          string `json:"url,omitempty"`
+	FileName     string `json:"file_name,omitempty"`
+	MimeType     string `json:"mime_type,omitempty"`
+	Size         int64  `json:"size,omitempty"`
 }
 
 // ProfileConfig holds the model and runtime settings for an agent profile.

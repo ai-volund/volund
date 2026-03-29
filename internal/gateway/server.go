@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"sync"
 
 	"github.com/nats-io/nats.go"
 	promhttp "github.com/prometheus/client_golang/prometheus/promhttp"
@@ -26,6 +25,7 @@ import (
 	"github.com/ai-volund/volund/internal/dispatch"
 	"github.com/ai-volund/volund/internal/gateway/api"
 	"github.com/ai-volund/volund/internal/llm"
+	"github.com/ai-volund/volund/internal/storage"
 	"github.com/ai-volund/volund/internal/usage"
 
 	volundpb "github.com/ai-volund/volund-proto/gen/go/volund/v1"
@@ -48,10 +48,9 @@ type Server struct {
 	// usageTracker subscribes to usage events on NATS and persists to DB.
 	usageTracker *usage.Tracker
 
-	// routingTable maps conversation_id → active agent instance_id.
-	// Kept as a fallback when claimMgr is nil.
-	routingTable map[string]string
-	routingMu    sync.RWMutex
+	// route is the shared routing table (Redis or in-memory fallback).
+	// Used directly by ws.go when claimMgr is nil.
+	route RoutingTable
 
 	httpServer *http.Server
 	grpcServer *grpc.Server
@@ -64,9 +63,24 @@ func New(cfg *config.Config, router *llm.Router, pool *db.Pool) *Server {
 		router: router,
 		pool:   pool,
 	}
+
+	// Initialize routing table — prefer Redis for multi-gateway, fall back to in-memory.
+	if cfg.RedisAddr != "" {
+		rt, err := NewRedisRoutingTable(cfg.RedisAddr)
+		if err != nil {
+			slog.Warn("redis routing table unavailable, falling back to in-memory",
+				"addr", cfg.RedisAddr, "error", err)
+			s.route = NewMemoryRoutingTable()
+		} else {
+			s.route = rt
+		}
+	} else {
+		s.route = NewMemoryRoutingTable()
+	}
+
 	// Initialize the claim manager when a DB pool is available.
 	if pool != nil {
-		s.claimMgr = NewClaimManager(&agentRepoAdapter{repo: db.NewAgentRepo(pool)})
+		s.claimMgr = NewClaimManager(&agentRepoAdapter{repo: db.NewAgentRepo(pool)}, s.route)
 	}
 	return s
 }
@@ -228,6 +242,29 @@ func (s *Server) Start(ctx context.Context) error {
 			}
 		}
 
+		// Initialize object storage for file attachments.
+		var store storage.Store
+		switch s.cfg.StorageBackend {
+		case "s3":
+			store = storage.NewS3Store(storage.S3Config{
+				Endpoint:     s.cfg.S3Endpoint,
+				Bucket:       s.cfg.S3Bucket,
+				AccessKey:    s.cfg.S3AccessKey,
+				SecretKey:    s.cfg.S3SecretKey,
+				UsePathStyle: s.cfg.S3UsePathStyle,
+			})
+			slog.Info("file storage: S3", "endpoint", s.cfg.S3Endpoint, "bucket", s.cfg.S3Bucket)
+		default:
+			ls, err := storage.NewLocalStore(s.cfg.StorageLocalDir,
+				fmt.Sprintf("http://localhost%s/v1/attachments", s.cfg.GatewayHTTPAddr))
+			if err != nil {
+				slog.Warn("local storage init failed, file uploads disabled", "error", err)
+			} else {
+				store = ls
+				slog.Info("file storage: local", "path", s.cfg.StorageLocalDir)
+			}
+		}
+
 		svc := &api.Services{
 			Auth:            auth.NewService(tm, db.NewUserRepo(s.pool), db.NewTenantRepo(s.pool), db.NewRefreshTokenRepo(s.pool)),
 			TM:              tm,
@@ -246,8 +283,12 @@ func (s *Server) Start(ctx context.Context) error {
 			CredBroker:      credBroker,
 			EmbedFn:         embedFn,
 			Usage:           db.NewUsageRepo(s.pool),
+			Quotas:          db.NewQuotaRepo(s.pool),
 			ProfileResolver: profileResolver,
 			OIDCMgr:         oidcMgr,
+			Attachments:     db.NewAttachmentRepo(s.pool),
+			Store:           store,
+			MaxUploadSize:   s.cfg.MaxUploadSize,
 		}
 		api.Register(mux, svc)
 		slog.Info("REST API routes registered")
@@ -333,5 +374,8 @@ func (s *Server) Stop(ctx context.Context) {
 	}
 	if s.natsConn != nil {
 		s.natsConn.Drain() //nolint:errcheck
+	}
+	if s.route != nil {
+		s.route.Close()
 	}
 }

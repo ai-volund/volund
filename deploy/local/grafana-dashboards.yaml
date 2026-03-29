@@ -1,0 +1,246 @@
+---
+# Grafana dashboard provisioning config.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-provisioning
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: volund
+        orgId: 1
+        folder: Volund
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards
+          foldersFromFilesStructure: false
+---
+# Grafana dashboards — Warm Pool & Claim Latency SLA.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+data:
+  warm-pool.json: |
+    {
+      "annotations": { "list": [] },
+      "editable": true,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 1,
+      "id": null,
+      "links": [],
+      "panels": [
+        {
+          "title": "Claim Latency — P50 / P95 / P99",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, sum(rate(volund_claim_duration_seconds_bucket[5m])) by (le))",
+              "legendFormat": "P50",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(volund_claim_duration_seconds_bucket[5m])) by (le))",
+              "legendFormat": "P95",
+              "refId": "B"
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(volund_claim_duration_seconds_bucket[5m])) by (le))",
+              "legendFormat": "P99",
+              "refId": "C"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 0.2 },
+                  { "color": "red", "value": 0.5 }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "tooltip": { "mode": "multi" },
+            "legend": { "displayMode": "table", "calcs": ["lastNotNull", "mean", "max"] }
+          }
+        },
+        {
+          "title": "Claim Latency Heatmap",
+          "type": "heatmap",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+          "targets": [
+            {
+              "expr": "sum(increase(volund_claim_duration_seconds_bucket[1m])) by (le)",
+              "legendFormat": "{{le}}",
+              "refId": "A",
+              "format": "heatmap"
+            }
+          ],
+          "options": {
+            "yAxis": { "unit": "s" },
+            "color": { "scheme": "Spectral", "reverse": true }
+          }
+        },
+        {
+          "title": "Claim Rate by Result",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 },
+          "targets": [
+            {
+              "expr": "sum(rate(volund_claim_total[5m])) by (result)",
+              "legendFormat": "{{result}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": { "unit": "reqps" },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "claimed" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] },
+              { "matcher": { "id": "byName", "options": "unavailable" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] },
+              { "matcher": { "id": "byName", "options": "error" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }
+            ]
+          }
+        },
+        {
+          "title": "Claim Success Rate",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 4, "x": 8, "y": 8 },
+          "targets": [
+            {
+              "expr": "sum(rate(volund_claim_total{result=\"claimed\"}[5m])) / sum(rate(volund_claim_total[5m])) * 100",
+              "legendFormat": "",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "red", "value": null },
+                  { "color": "yellow", "value": 80 },
+                  { "color": "green", "value": 95 }
+                ]
+              }
+            }
+          },
+          "options": {
+            "textMode": "value",
+            "reduceOptions": { "calcs": ["lastNotNull"] }
+          }
+        },
+        {
+          "title": "P95 Claim Latency (Current)",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 4, "x": 12, "y": 8 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(volund_claim_duration_seconds_bucket[5m])) by (le))",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 0.2 },
+                  { "color": "red", "value": 0.5 }
+                ]
+              }
+            }
+          },
+          "options": {
+            "textMode": "value",
+            "reduceOptions": { "calcs": ["lastNotNull"] }
+          }
+        },
+        {
+          "title": "Active Instances",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
+          "targets": [
+            {
+              "expr": "volund_active_instances",
+              "legendFormat": "Active",
+              "refId": "A"
+            },
+            {
+              "expr": "volund_warm_pool_size",
+              "legendFormat": "Warm (available)",
+              "refId": "B"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": { "unit": "short" },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "Active" }, "properties": [{ "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }] },
+              { "matcher": { "id": "byName", "options": "Warm (available)" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] }
+            ]
+          }
+        },
+        {
+          "title": "Claim Duration by Path",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(volund_claim_duration_seconds_bucket{path=\"cache_hit\"}[5m])) by (le))",
+              "legendFormat": "Cache hit P95",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(volund_claim_duration_seconds_bucket{path=\"db_claim\"}[5m])) by (le))",
+              "legendFormat": "DB claim P95",
+              "refId": "B"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "s" } }
+        },
+        {
+          "title": "Dispatch Latency — P50 / P95 / P99",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, sum(rate(volund_dispatch_duration_seconds_bucket[5m])) by (le))",
+              "legendFormat": "P50",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(volund_dispatch_duration_seconds_bucket[5m])) by (le))",
+              "legendFormat": "P95",
+              "refId": "B"
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(volund_dispatch_duration_seconds_bucket[5m])) by (le))",
+              "legendFormat": "P99",
+              "refId": "C"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "s" } }
+        }
+      ],
+      "refresh": "10s",
+      "schemaVersion": 39,
+      "tags": ["volund", "warm-pool", "sla"],
+      "templating": { "list": [] },
+      "time": { "from": "now-1h", "to": "now" },
+      "timepicker": {},
+      "timezone": "browser",
+      "title": "Volund — Warm Pool & Claim Latency SLA",
+      "uid": "volund-warm-pool",
+      "version": 1
+    }

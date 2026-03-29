@@ -163,14 +163,12 @@ func (s *Server) handleClientFrame(ctx context.Context, frame wsClientFrame, con
 }
 
 // activeInstance returns the currently active agent instance ID for a conversation.
-// Delegates to ClaimManager when available, falls back to in-memory routingTable.
+// Delegates to ClaimManager when available, falls back to the shared routing table.
 func (s *Server) activeInstance(convID string) string {
 	if s.claimMgr != nil {
 		return s.claimMgr.ActiveInstance(convID)
 	}
-	s.routingMu.RLock()
-	defer s.routingMu.RUnlock()
-	return s.routingTable[convID]
+	return s.route.Get(convID)
 }
 
 // setActiveInstance records which agent instance is handling a conversation.
@@ -179,12 +177,7 @@ func (s *Server) setActiveInstance(convID, instanceID string) {
 		s.claimMgr.SetActiveInstance(convID, instanceID)
 		return
 	}
-	s.routingMu.Lock()
-	defer s.routingMu.Unlock()
-	if s.routingTable == nil {
-		s.routingTable = make(map[string]string)
-	}
-	s.routingTable[convID] = instanceID
+	s.route.Set(convID, instanceID, 0)
 }
 
 // clearActiveInstance removes the routing entry when an agent finishes.
@@ -193,9 +186,7 @@ func (s *Server) clearActiveInstance(convID string) {
 		s.claimMgr.ClearActiveInstance(convID)
 		return
 	}
-	s.routingMu.Lock()
-	defer s.routingMu.Unlock()
-	delete(s.routingTable, convID)
+	s.route.Delete(convID)
 }
 
 // watchConvStream watches a conversation's NATS stream to:

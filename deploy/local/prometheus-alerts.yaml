@@ -1,0 +1,113 @@
+---
+# Prometheus alerting rules for Volund warm pool SLA monitoring.
+# Mount into the Prometheus ConfigMap alongside prometheus.yml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-alerts
+data:
+  alerts.yml: |
+    groups:
+      - name: volund_warm_pool
+        interval: 15s
+        rules:
+          # ── Claim Latency SLA ────────────────────────────────────────────
+
+          # P95 claim latency exceeded 200ms over 5 minutes.
+          - alert: ClaimLatencyP95High
+            expr: |
+              histogram_quantile(0.95,
+                sum(rate(volund_claim_duration_seconds_bucket[5m])) by (le)
+              ) > 0.2
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Warm pool claim P95 latency > 200ms"
+              description: >
+                P95 claim latency is {{ $value | humanizeDuration }} over the last 5 minutes.
+                SLA target: P95 < 200ms. Investigate warm pool sizing or database performance.
+
+          # P99 claim latency exceeded 500ms over 5 minutes.
+          - alert: ClaimLatencyP99Critical
+            expr: |
+              histogram_quantile(0.99,
+                sum(rate(volund_claim_duration_seconds_bucket[5m])) by (le)
+              ) > 0.5
+            for: 2m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Warm pool claim P99 latency > 500ms"
+              description: >
+                P99 claim latency is {{ $value | humanizeDuration }} over the last 5 minutes.
+                SLA target: P99 < 500ms. This may indicate warm pool exhaustion or database bottleneck.
+
+          # ── Claim Availability ───────────────────────────────────────────
+
+          # More than 10% of claims resulted in "unavailable" (no warm pods).
+          - alert: WarmPoolExhaustion
+            expr: |
+              sum(rate(volund_claim_total{result="unavailable"}[5m]))
+              /
+              sum(rate(volund_claim_total[5m]))
+              > 0.1
+            for: 3m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Warm pool exhaustion rate > 10%"
+              description: >
+                {{ $value | humanizePercentage }} of claims are failing due to no available warm pods.
+                Consider scaling up the warm pool or adjusting pre-warming strategies.
+
+          # No successful claims in the last 5 minutes despite attempts.
+          - alert: WarmPoolDown
+            expr: |
+              sum(rate(volund_claim_total{result="claimed"}[5m])) == 0
+              and
+              sum(rate(volund_claim_total[5m])) > 0
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "No successful warm pool claims"
+              description: >
+                Claims are being attempted but none are succeeding.
+                Warm pool may be completely exhausted or the database is unreachable.
+
+          # ── Claim Errors ─────────────────────────────────────────────────
+
+          # Claim errors exceeding 5% of total attempts.
+          - alert: ClaimErrorRate
+            expr: |
+              sum(rate(volund_claim_total{result="error"}[5m]))
+              /
+              sum(rate(volund_claim_total[5m]))
+              > 0.05
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Claim error rate > 5%"
+              description: >
+                {{ $value | humanizePercentage }} of claim attempts are erroring.
+                Check database connectivity and agent_instances table health.
+
+          # ── Active Instances ─────────────────────────────────────────────
+
+          # Active instances approaching warm pool capacity (>80% utilization).
+          - alert: WarmPoolHighUtilization
+            expr: |
+              volund_active_instances
+              /
+              (volund_active_instances + volund_warm_pool_size)
+              > 0.8
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Warm pool utilization > 80%"
+              description: >
+                {{ $value | humanizePercentage }} of the warm pool is in use.
+                Scale up the warm pool to maintain headroom for burst traffic.

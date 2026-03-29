@@ -174,6 +174,8 @@ data:
   prometheus.yml: |
     global:
       scrape_interval: 15s
+    rule_files:
+      - /etc/prometheus/alerts.yml
     scrape_configs:
       - job_name: otel-collector
         static_configs:
@@ -222,10 +224,20 @@ spec:
           volumeMounts:
             - name: datasources
               mountPath: /etc/grafana/provisioning/datasources
+            - name: dashboard-provisioning
+              mountPath: /etc/grafana/provisioning/dashboards
+            - name: dashboards
+              mountPath: /var/lib/grafana/dashboards
       volumes:
         - name: datasources
           configMap:
             name: grafana-datasources
+        - name: dashboard-provisioning
+          configMap:
+            name: grafana-dashboard-provisioning
+        - name: dashboards
+          configMap:
+            name: grafana-dashboards
 ---
 apiVersion: v1
 kind: ConfigMap

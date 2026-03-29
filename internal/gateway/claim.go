@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sync"
+	"time"
 
 	"github.com/ai-volund/volund/internal/gateway/api"
 	votel "github.com/ai-volund/volund/internal/otel"
@@ -28,20 +28,18 @@ type AgentInstanceInfo struct {
 }
 
 // ClaimManager handles pod claim/release for conversations.
-// It wraps the DB agent repo and provides conversation-scoped instance
-// assignment with an in-memory cache for fast lookups.
+// It wraps the DB agent repo and delegates the conv→instance routing cache
+// to a RoutingTable (Redis for multi-gateway, in-memory for single-gateway).
 type ClaimManager struct {
-	repo AgentInstanceRepo
-	mu   sync.RWMutex
-	// active maps conversation_id → instance_id.
-	active map[string]string
+	repo  AgentInstanceRepo
+	route RoutingTable
 }
 
-// NewClaimManager creates a ClaimManager backed by the given repo.
-func NewClaimManager(repo AgentInstanceRepo) *ClaimManager {
+// NewClaimManager creates a ClaimManager backed by the given repo and routing table.
+func NewClaimManager(repo AgentInstanceRepo, route RoutingTable) *ClaimManager {
 	return &ClaimManager{
-		repo:   repo,
-		active: make(map[string]string),
+		repo:  repo,
+		route: route,
 	}
 }
 
@@ -49,29 +47,35 @@ func NewClaimManager(repo AgentInstanceRepo) *ClaimManager {
 // pod if one is not already assigned. Returns (nil, nil) when no warm pod is
 // available — callers should fall back to pool dispatch.
 func (cm *ClaimManager) EnsureInstance(ctx context.Context, convID, tenantID, profileID string) (*api.ClaimResult, error) {
-	// Fast path: check in-memory cache.
-	cm.mu.RLock()
-	if id, ok := cm.active[convID]; ok {
-		cm.mu.RUnlock()
-		// For cached entries we don't have the pod name; return ID only.
+	start := time.Now()
+
+	// Fast path: check routing table (Redis or in-memory).
+	if id := cm.route.Get(convID); id != "" {
+		dur := time.Since(start).Seconds()
+		votel.ClaimDuration.Record(ctx, dur, votel.ClaimRecordAttrs("hit", "cache_hit"))
 		return &api.ClaimResult{InstanceID: id}, nil
 	}
-	cm.mu.RUnlock()
 
 	// Slow path: claim from DB.
 	inst, err := cm.repo.ClaimInstance(ctx, tenantID, profileID)
 	if err != nil {
+		dur := time.Since(start).Seconds()
+		votel.ClaimDuration.Record(ctx, dur, votel.ClaimRecordAttrs("error", "db_claim"))
+		votel.ClaimTotal.Add(ctx, 1, votel.ClaimAttrs("error"))
 		return nil, fmt.Errorf("claim instance for conv %s: %w", convID, err)
 	}
 	if inst == nil {
 		// No warm pods available — caller should fall back to pool dispatch.
+		dur := time.Since(start).Seconds()
+		votel.ClaimDuration.Record(ctx, dur, votel.ClaimRecordAttrs("unavailable", "db_claim"))
+		votel.ClaimTotal.Add(ctx, 1, votel.ClaimAttrs("unavailable"))
 		return nil, nil
 	}
 
-	cm.mu.Lock()
-	cm.active[convID] = inst.ID
-	cm.mu.Unlock()
+	cm.route.Set(convID, inst.ID, 0) // default TTL
 
+	dur := time.Since(start).Seconds()
+	votel.ClaimDuration.Record(ctx, dur, votel.ClaimRecordAttrs("claimed", "db_claim"))
 	votel.ClaimTotal.Add(ctx, 1, votel.ClaimAttrs("claimed"))
 	votel.ActiveInstances.Add(ctx, 1)
 
@@ -81,6 +85,7 @@ func (cm *ClaimManager) EnsureInstance(ctx context.Context, convID, tenantID, pr
 		"pod_name", inst.PodName,
 		"tenant_id", tenantID,
 		"profile_id", profileID,
+		"claim_duration_ms", time.Since(start).Milliseconds(),
 	)
 	return &api.ClaimResult{InstanceID: inst.ID, PodName: inst.PodName}, nil
 }
@@ -88,14 +93,11 @@ func (cm *ClaimManager) EnsureInstance(ctx context.Context, convID, tenantID, pr
 // Release releases the instance for a conversation back to the warm pool.
 // No-op if the conversation has no active instance.
 func (cm *ClaimManager) Release(ctx context.Context, convID string) error {
-	cm.mu.Lock()
-	instanceID, ok := cm.active[convID]
-	if !ok {
-		cm.mu.Unlock()
+	instanceID := cm.route.Get(convID)
+	if instanceID == "" {
 		return nil
 	}
-	delete(cm.active, convID)
-	cm.mu.Unlock()
+	cm.route.Delete(convID)
 
 	if err := cm.repo.ReleaseInstance(ctx, instanceID); err != nil {
 		return fmt.Errorf("release instance %s for conv %s: %w", instanceID, convID, err)
@@ -111,26 +113,20 @@ func (cm *ClaimManager) Release(ctx context.Context, convID string) error {
 }
 
 // ActiveInstance returns the currently assigned instance for a conversation,
-// or "" if none is assigned.
+// or "" if none is assigned. Reads from the shared routing table.
 func (cm *ClaimManager) ActiveInstance(convID string) string {
-	cm.mu.RLock()
-	defer cm.mu.RUnlock()
-	return cm.active[convID]
+	return cm.route.Get(convID)
 }
 
 // SetActiveInstance records an instance assignment (e.g. from an agent_start
 // event) without going through the claim flow.
 func (cm *ClaimManager) SetActiveInstance(convID, instanceID string) {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-	cm.active[convID] = instanceID
+	cm.route.Set(convID, instanceID, 0)
 }
 
 // ClearActiveInstance removes the routing entry. Used when agent_end is
 // observed but the instance should not be released back to the pool (e.g.
 // the watcher handles release separately).
 func (cm *ClaimManager) ClearActiveInstance(convID string) {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-	delete(cm.active, convID)
+	cm.route.Delete(convID)
 }

@@ -37,7 +37,7 @@ func (m *mockRepo) ReleaseInstance(ctx context.Context, id string) error {
 
 func TestClaimManager_EnsureInstance_ClaimNew(t *testing.T) {
 	repo := &mockRepo{}
-	cm := NewClaimManager(repo)
+	cm := NewClaimManager(repo, NewMemoryRoutingTable())
 
 	result, err := cm.EnsureInstance(context.Background(), "conv-1", "tenant-1", "profile-1")
 	if err != nil {
@@ -57,7 +57,7 @@ func TestClaimManager_EnsureInstance_ClaimNew(t *testing.T) {
 
 func TestClaimManager_EnsureInstance_ReturnsCached(t *testing.T) {
 	repo := &mockRepo{}
-	cm := NewClaimManager(repo)
+	cm := NewClaimManager(repo, NewMemoryRoutingTable())
 
 	// First call claims from DB.
 	_, _ = cm.EnsureInstance(context.Background(), "conv-1", "tenant-1", "profile-1")
@@ -77,7 +77,7 @@ func TestClaimManager_EnsureInstance_ReturnsCached(t *testing.T) {
 
 func TestClaimManager_Release(t *testing.T) {
 	repo := &mockRepo{}
-	cm := NewClaimManager(repo)
+	cm := NewClaimManager(repo, NewMemoryRoutingTable())
 
 	// Claim first.
 	_, _ = cm.EnsureInstance(context.Background(), "conv-1", "tenant-1", "profile-1")
@@ -100,7 +100,7 @@ func TestClaimManager_Release(t *testing.T) {
 
 func TestClaimManager_Release_Unknown(t *testing.T) {
 	repo := &mockRepo{}
-	cm := NewClaimManager(repo)
+	cm := NewClaimManager(repo, NewMemoryRoutingTable())
 
 	// Release a conversation that was never claimed — should be a no-op.
 	if err := cm.Release(context.Background(), "conv-unknown"); err != nil {
@@ -117,7 +117,7 @@ func TestClaimManager_EnsureInstance_ClaimFails(t *testing.T) {
 			return nil, errors.New("db connection lost")
 		},
 	}
-	cm := NewClaimManager(repo)
+	cm := NewClaimManager(repo, NewMemoryRoutingTable())
 
 	result, err := cm.EnsureInstance(context.Background(), "conv-1", "tenant-1", "profile-1")
 	if err == nil {
@@ -138,7 +138,7 @@ func TestClaimManager_EnsureInstance_NoWarmPods(t *testing.T) {
 			return nil, nil // no warm pods
 		},
 	}
-	cm := NewClaimManager(repo)
+	cm := NewClaimManager(repo, NewMemoryRoutingTable())
 
 	result, err := cm.EnsureInstance(context.Background(), "conv-1", "tenant-1", "profile-1")
 	if err != nil {
