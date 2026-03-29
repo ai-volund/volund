@@ -12,6 +12,7 @@ import (
 	"github.com/ai-volund/volund/internal/credentials"
 	"github.com/ai-volund/volund/internal/db"
 	"github.com/ai-volund/volund/internal/dispatch"
+	"github.com/ai-volund/volund/internal/providers"
 	"github.com/ai-volund/volund/internal/storage"
 )
 
@@ -71,6 +72,8 @@ type Services struct {
 	Store storage.Store
 	// MaxUploadSize is the maximum file upload size in bytes.
 	MaxUploadSize int64
+	// OAuth is the generic OAuth2 engine for service provider connections. nil = disabled.
+	OAuth *providers.Engine
 }
 
 // Register mounts all API routes on mux under /v1/.
@@ -99,12 +102,15 @@ func Register(mux *http.ServeMux, svc *Services) {
 	// Invite accept (public — token is the secret)
 	mux.HandleFunc("POST /v1/invites/{token}/accept", svc.handleAcceptInvite)
 
-	// Agent profiles
+	// Agent profiles — user-scoped custom agents
 	mux.HandleFunc("POST /v1/agents", RequireAuth(svc.handleCreateAgent))
 	mux.HandleFunc("GET /v1/agents", RequireAuth(svc.handleListAgents))
 	mux.HandleFunc("GET /v1/agents/{id}", RequireAuth(svc.handleGetAgent))
 	mux.HandleFunc("PUT /v1/agents/{id}", RequireAuth(svc.handleUpdateAgent))
 	mux.HandleFunc("DELETE /v1/agents/{id}", RequireAuth(svc.handleDeleteAgent))
+
+	// Agent profiles — admin-managed system agents
+	mux.HandleFunc("POST /v1/admin/agents", RequireAuth(svc.handleCreateSystemAgent))
 
 	// Conversations
 	mux.HandleFunc("POST /v1/conversations", RequireAuth(svc.handleCreateConversation))
@@ -121,6 +127,14 @@ func Register(mux *http.ServeMux, svc *Services) {
 	mux.HandleFunc("GET /v1/tasks", RequireAuth(svc.handleListTasks))
 	mux.HandleFunc("GET /v1/tasks/{id}", RequireAuth(svc.handleGetTask))
 	mux.HandleFunc("POST /v1/tasks/{id}/cancel", RequireAuth(svc.handleCancelTask))
+
+	// Skill activation — tenant install + user enable
+	mux.HandleFunc("GET /v1/skills", RequireAuth(svc.handleListAvailableSkills))
+	mux.HandleFunc("POST /v1/skills/{id}/enable", RequireAuth(svc.handleEnableSkill))
+	mux.HandleFunc("DELETE /v1/skills/{id}/enable", RequireAuth(svc.handleDisableSkill))
+	mux.HandleFunc("POST /v1/admin/skills/{id}/install", RequireAuth(svc.handleInstallSkill))
+	mux.HandleFunc("DELETE /v1/admin/skills/{id}/install", RequireAuth(svc.handleUninstallSkill))
+	mux.HandleFunc("GET /v1/admin/skills/installed", RequireAuth(svc.handleListInstalledSkills))
 
 	// Forge registry — skill catalog (public read, auth required for write)
 	mux.HandleFunc("GET /v1/forge/skills", svc.handleListSkills)
@@ -147,6 +161,16 @@ func Register(mux *http.ServeMux, svc *Services) {
 	mux.HandleFunc("DELETE /v1/credentials/{provider}", RequireAuth(svc.handleDeleteCredential))
 	mux.HandleFunc("POST /v1/credentials/token", RequireAuth(svc.handleIssueToken))
 	mux.HandleFunc("GET /v1/credentials/audit", RequireAuth(svc.handleCredentialAudit))
+
+	// OAuth connect flow — generic OAuth2 provider connections
+	mux.HandleFunc("GET /v1/connect", RequireAuth(svc.handleConnectList))
+	mux.HandleFunc("GET /v1/connect/{provider}", RequireAuth(svc.handleConnectStart))
+	mux.HandleFunc("GET /v1/connect/{provider}/callback", svc.handleConnectCallback) // no auth — user returns from OAuth redirect
+
+	// Admin — OAuth provider management (credentials only; definitions come from skill manifests)
+	mux.HandleFunc("PUT /v1/admin/providers/{id}/credentials", RequireAuth(svc.handleSetProviderCredentials))
+	mux.HandleFunc("GET /v1/admin/providers", RequireAuth(svc.handleListProviders))
+	mux.HandleFunc("DELETE /v1/admin/providers/{id}", RequireAuth(svc.handleDeleteProvider))
 }
 
 // RequireAuth wraps a handler to require a valid JWT; returns 401 if missing.

@@ -9,25 +9,8 @@
       },
       "max_tool_rounds": 25,
       "system_prompt": "You are a helpful AI assistant powered by the Volund platform. Be concise and direct in your responses. IMPORTANT: When the user asks you to use a tool, you MUST call the tool using the function calling interface. Do not simulate or fake tool output — always invoke the actual tool.",
-      "skills": [
-      {
-        "name": "volund-guidelines",
-        "type": "prompt",
-        "version": "1.0.0",
-        "description": "General Volund agent guidelines and behavior",
-        "prompt": "# Volund Agent Guidelines\n\nYou are a helpful AI assistant powered by the Volund platform.\n\n## Behavior\n- Be concise and direct in your responses\n- When asked about your capabilities, mention that you can use tools and skills\n- Always identify yourself as a Volund agent when asked who you are\n\n## Available Skills\nYou may have additional tools available. Use them when appropriate to fulfill user requests."
-      },
-      {
-        "name": "echo-test",
-        "type": "mcp",
-        "version": "1.0.0",
-        "description": "Echo test tool for verifying MCP skill integration",
-        "runtime": {
-          "image": "/usr/local/bin/mcp-echo",
-          "transport": "stdio"
-        }
-      }
-    ]},
+      "skills": []
+    },
     "default": {
       "model": {
         "provider": "openai",
@@ -36,14 +19,7 @@
         "temperature": 0.7
       },
       "system_prompt": "You are a helpful AI assistant powered by the Volund platform. Be concise and direct.",
-      "skills": [
-      {
-        "name": "volund-guidelines",
-        "type": "prompt",
-        "version": "1.0.0",
-        "description": "General Volund agent guidelines",
-        "prompt": "# Volund Agent Guidelines\n\nYou are a helpful AI assistant powered by the Volund platform. Be concise and direct."
-      }
-    ]}
+      "skills": []
+    }
   }
 }

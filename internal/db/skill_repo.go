@@ -159,6 +159,125 @@ type SkillFilter struct {
 	Offset int
 }
 
+// ── Tenant-level skill installation ──────────────────────────────────────────
+
+// InstallForTenant marks a skill as available for a tenant's users.
+func (r *SkillRepo) InstallForTenant(ctx context.Context, tenantID, skillID string) error {
+	_, err := r.pool.Exec(ctx,
+		`INSERT INTO tenant_skills (tenant_id, skill_id) VALUES ($1, $2)
+		 ON CONFLICT DO NOTHING`, tenantID, skillID)
+	return err
+}
+
+// UninstallForTenant removes a skill from a tenant (also removes user enablements).
+func (r *SkillRepo) UninstallForTenant(ctx context.Context, tenantID, skillID string) error {
+	// Remove user enablements first, then tenant install.
+	_, _ = r.pool.Exec(ctx,
+		`DELETE FROM user_skills WHERE tenant_id = $1 AND skill_id = $2`, tenantID, skillID)
+	_, err := r.pool.Exec(ctx,
+		`DELETE FROM tenant_skills WHERE tenant_id = $1 AND skill_id = $2`, tenantID, skillID)
+	return err
+}
+
+// ListTenantSkills returns all skills installed for a tenant.
+func (r *SkillRepo) ListTenantSkills(ctx context.Context, tenantID string) ([]*RegistrySkill, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT s.id, s.name, s.version, s.description, s.author, s.type, s.tags, s.spec,
+		        s.readme, s.downloads, s.published, s.created_at, s.updated_at
+		 FROM skills s JOIN tenant_skills ts ON s.id = ts.skill_id
+		 WHERE ts.tenant_id = $1 ORDER BY s.name`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("list tenant skills: %w", err)
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (*RegistrySkill, error) {
+		return scanSkillRow(row)
+	})
+}
+
+// ── User-level skill enablement ─────────────────────────────────────────────
+
+// EnableForUser enables a tenant-installed skill for a specific user.
+func (r *SkillRepo) EnableForUser(ctx context.Context, tenantID, userID, skillID string) error {
+	// Verify the skill is installed at tenant level first.
+	var exists bool
+	err := r.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM tenant_skills WHERE tenant_id = $1 AND skill_id = $2)`,
+		tenantID, skillID).Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("check tenant install: %w", err)
+	}
+	if !exists {
+		return fmt.Errorf("skill not installed for this tenant")
+	}
+
+	_, err = r.pool.Exec(ctx,
+		`INSERT INTO user_skills (tenant_id, user_id, skill_id) VALUES ($1, $2, $3)
+		 ON CONFLICT DO NOTHING`, tenantID, userID, skillID)
+	return err
+}
+
+// DisableForUser disables a skill for a specific user.
+func (r *SkillRepo) DisableForUser(ctx context.Context, tenantID, userID, skillID string) error {
+	_, err := r.pool.Exec(ctx,
+		`DELETE FROM user_skills WHERE tenant_id = $1 AND user_id = $2 AND skill_id = $3`,
+		tenantID, userID, skillID)
+	return err
+}
+
+// ListActiveSkills returns skills that are BOTH tenant-installed AND user-enabled.
+// This is the dispatch-time query — only these skills get wired into the agent.
+func (r *SkillRepo) ListActiveSkills(ctx context.Context, tenantID, userID string) ([]*RegistrySkill, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT s.id, s.name, s.version, s.description, s.author, s.type, s.tags, s.spec,
+		        s.readme, s.downloads, s.published, s.created_at, s.updated_at
+		 FROM skills s
+		 JOIN tenant_skills ts ON s.id = ts.skill_id AND ts.tenant_id = $1
+		 JOIN user_skills us ON s.id = us.skill_id AND us.tenant_id = $1 AND us.user_id = $2
+		 ORDER BY s.name`, tenantID, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list active skills: %w", err)
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (*RegistrySkill, error) {
+		return scanSkillRow(row)
+	})
+}
+
+// ListAvailableSkills returns tenant-installed skills with an `enabled` flag per user.
+// Used by the UI to show all available skills with toggle state.
+type AvailableSkill struct {
+	*RegistrySkill
+	Enabled bool
+}
+
+func (r *SkillRepo) ListAvailableSkills(ctx context.Context, tenantID, userID string) ([]*AvailableSkill, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT s.id, s.name, s.version, s.description, s.author, s.type, s.tags, s.spec,
+		        s.readme, s.downloads, s.published, s.created_at, s.updated_at,
+		        (us.user_id IS NOT NULL) AS enabled
+		 FROM skills s
+		 JOIN tenant_skills ts ON s.id = ts.skill_id AND ts.tenant_id = $1
+		 LEFT JOIN user_skills us ON s.id = us.skill_id AND us.tenant_id = $1 AND us.user_id = $2
+		 ORDER BY s.name`, tenantID, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list available skills: %w", err)
+	}
+	defer rows.Close()
+
+	var result []*AvailableSkill
+	for rows.Next() {
+		var s RegistrySkill
+		var enabled bool
+		err := rows.Scan(&s.ID, &s.Name, &s.Version, &s.Description, &s.Author, &s.Type,
+			&s.Tags, &s.Spec, &s.Readme, &s.Downloads, &s.Published, &s.CreatedAt, &s.UpdatedAt,
+			&enabled)
+		if err != nil {
+			return nil, fmt.Errorf("scan available skill: %w", err)
+		}
+		result = append(result, &AvailableSkill{RegistrySkill: &s, Enabled: enabled})
+	}
+	return result, nil
+}
+
 func scanSkill(row pgx.Row) (*RegistrySkill, error) {
 	var s RegistrySkill
 	err := row.Scan(&s.ID, &s.Name, &s.Version, &s.Description, &s.Author, &s.Type,

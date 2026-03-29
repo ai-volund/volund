@@ -15,6 +15,8 @@ type AgentProfile struct {
 	TenantID      string
 	Name          string
 	ProfileType   string
+	Visibility    string  // "system" or "user"
+	OwnerID       *string // nil for system profiles, user ID for user profiles
 	SystemPrompt  string
 	ModelProvider string
 	ModelID       string
@@ -52,33 +54,45 @@ func (r *AgentRepo) CreateProfile(ctx context.Context, p *AgentProfile) (*AgentP
 	if skills == nil {
 		skills = json.RawMessage("[]")
 	}
+	if p.Visibility == "" {
+		p.Visibility = "system"
+	}
 	row := r.pool.QueryRow(ctx, `
 		INSERT INTO agent_profiles
-		  (tenant_id, name, profile_type, system_prompt, model_provider, model_id,
-		   temperature, max_tokens, skills)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-		RETURNING id, tenant_id, name, profile_type, system_prompt, model_provider,
-		          model_id, temperature, max_tokens, skills, created_at, updated_at
-	`, p.TenantID, p.Name, p.ProfileType, p.SystemPrompt, p.ModelProvider, p.ModelID,
-		p.Temperature, p.MaxTokens, skills)
+		  (tenant_id, name, profile_type, visibility, owner_id, system_prompt,
+		   model_provider, model_id, temperature, max_tokens, skills)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		RETURNING id, tenant_id, name, profile_type, visibility, owner_id,
+		          system_prompt, model_provider, model_id, temperature, max_tokens,
+		          skills, created_at, updated_at
+	`, p.TenantID, p.Name, p.ProfileType, p.Visibility, p.OwnerID, p.SystemPrompt,
+		p.ModelProvider, p.ModelID, p.Temperature, p.MaxTokens, skills)
 	return scanProfile(row)
 }
 
 func (r *AgentRepo) GetProfile(ctx context.Context, id string) (*AgentProfile, error) {
 	row := r.pool.QueryRow(ctx, `
-		SELECT id, tenant_id, name, profile_type, system_prompt, model_provider,
-		       model_id, temperature, max_tokens, skills, created_at, updated_at
+		SELECT id, tenant_id, name, profile_type, visibility, owner_id,
+		       system_prompt, model_provider, model_id, temperature, max_tokens,
+		       skills, created_at, updated_at
 		FROM agent_profiles WHERE id = $1
 	`, id)
 	return scanProfile(row)
 }
 
-func (r *AgentRepo) ListProfiles(ctx context.Context, tenantID string) ([]*AgentProfile, error) {
+// ListProfiles returns all profiles visible to the given user:
+// - All system-visibility profiles for the tenant
+// - User-visibility profiles owned by the specified userID (if non-empty)
+func (r *AgentRepo) ListProfiles(ctx context.Context, tenantID string, userID string) ([]*AgentProfile, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, tenant_id, name, profile_type, system_prompt, model_provider,
-		       model_id, temperature, max_tokens, skills, created_at, updated_at
-		FROM agent_profiles WHERE tenant_id = $1 ORDER BY created_at
-	`, tenantID)
+		SELECT id, tenant_id, name, profile_type, visibility, owner_id,
+		       system_prompt, model_provider, model_id, temperature, max_tokens,
+		       skills, created_at, updated_at
+		FROM agent_profiles
+		WHERE tenant_id = $1
+		  AND (visibility = 'system' OR (visibility = 'user' AND owner_id = $2))
+		ORDER BY created_at
+	`, tenantID, userID)
 	if err != nil {
 		return nil, fmt.Errorf("list profiles: %w", err)
 	}
@@ -95,13 +109,15 @@ func (r *AgentRepo) UpdateProfile(ctx context.Context, p *AgentProfile) (*AgentP
 	}
 	row := r.pool.QueryRow(ctx, `
 		UPDATE agent_profiles
-		SET name=$2, profile_type=$3, system_prompt=$4, model_provider=$5,
-		    model_id=$6, temperature=$7, max_tokens=$8, skills=$9, updated_at=NOW()
+		SET name=$2, profile_type=$3, visibility=$4, owner_id=$5,
+		    system_prompt=$6, model_provider=$7, model_id=$8,
+		    temperature=$9, max_tokens=$10, skills=$11, updated_at=NOW()
 		WHERE id=$1
-		RETURNING id, tenant_id, name, profile_type, system_prompt, model_provider,
-		          model_id, temperature, max_tokens, skills, created_at, updated_at
-	`, p.ID, p.Name, p.ProfileType, p.SystemPrompt, p.ModelProvider, p.ModelID,
-		p.Temperature, p.MaxTokens, skills)
+		RETURNING id, tenant_id, name, profile_type, visibility, owner_id,
+		          system_prompt, model_provider, model_id, temperature, max_tokens,
+		          skills, created_at, updated_at
+	`, p.ID, p.Name, p.ProfileType, p.Visibility, p.OwnerID, p.SystemPrompt,
+		p.ModelProvider, p.ModelID, p.Temperature, p.MaxTokens, skills)
 	return scanProfile(row)
 }
 
@@ -185,8 +201,9 @@ func (r *AgentRepo) GetInstance(ctx context.Context, id string) (*AgentInstance,
 // GetProfileByName looks up a profile by (tenant_id, name).
 func (r *AgentRepo) GetProfileByName(ctx context.Context, tenantID, name string) (*AgentProfile, error) {
 	row := r.pool.QueryRow(ctx, `
-		SELECT id, tenant_id, name, profile_type, system_prompt, model_provider,
-		       model_id, temperature, max_tokens, skills, created_at, updated_at
+		SELECT id, tenant_id, name, profile_type, visibility, owner_id,
+		       system_prompt, model_provider, model_id, temperature, max_tokens,
+		       skills, created_at, updated_at
 		FROM agent_profiles WHERE tenant_id = $1 AND name = $2
 	`, tenantID, name)
 	return scanProfile(row)
@@ -226,8 +243,8 @@ func (r *AgentRepo) UpsertInstanceByPodName(ctx context.Context, tenantID string
 func scanProfile(row pgx.Row) (*AgentProfile, error) {
 	p := &AgentProfile{}
 	err := row.Scan(
-		&p.ID, &p.TenantID, &p.Name, &p.ProfileType, &p.SystemPrompt,
-		&p.ModelProvider, &p.ModelID, &p.Temperature, &p.MaxTokens,
+		&p.ID, &p.TenantID, &p.Name, &p.ProfileType, &p.Visibility, &p.OwnerID,
+		&p.SystemPrompt, &p.ModelProvider, &p.ModelID, &p.Temperature, &p.MaxTokens,
 		&p.Skills, &p.CreatedAt, &p.UpdatedAt,
 	)
 	if err != nil {

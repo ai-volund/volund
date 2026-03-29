@@ -235,6 +235,24 @@ func (s *Services) dispatchToAgent(ctx context.Context, convo *db.Conversation, 
 		}
 	}
 
+	// Resolve user's active skills (tenant-installed + user-enabled) and append to task.
+	if s.Skills != nil && userID != "" {
+		activeSkills, err := s.Skills.ListActiveSkills(ctx, tenantID, userID)
+		if err != nil {
+			slog.Warn("dispatch: failed to list active skills", "error", err)
+		} else {
+			for _, sk := range activeSkills {
+				spec := skillToSpec(sk)
+				if spec != nil {
+					task.Skills = append(task.Skills, *spec)
+				}
+			}
+			if len(activeSkills) > 0 {
+				slog.Info("dispatch: attached active skills", "count", len(activeSkills), "conv_id", convo.ID)
+			}
+		}
+	}
+
 	// Issue scoped credentials for the task if the broker is available.
 	if s.CredBroker != nil && userID != "" {
 		providers, err := s.CredBroker.ListProviders(ctx, tenantID, userID)
@@ -293,6 +311,43 @@ func (s *Services) dispatchToAgent(ctx context.Context, convo *db.Conversation, 
 	if err := s.DispatchFn(ctx, task); err != nil {
 		slog.Error("dispatch: failed to dispatch task", "conv_id", convo.ID, "task_id", task.TaskID, "error", err)
 	}
+}
+
+// skillToSpec converts a DB RegistrySkill to a dispatch.SkillSpec.
+// It parses the spec JSON to extract runtime configuration.
+func skillToSpec(sk *db.RegistrySkill) *dispatch.SkillSpec {
+	spec := &dispatch.SkillSpec{
+		Name:        sk.Name,
+		Type:        sk.Type,
+		Version:     sk.Version,
+		Description: sk.Description,
+	}
+
+	// Parse runtime config from the spec JSONB.
+	if sk.Spec != nil {
+		var parsed struct {
+			Runtime *struct {
+				Image     string `json:"image"`
+				Mode      string `json:"mode"`
+				Transport string `json:"transport"`
+			} `json:"runtime"`
+			Prompt string `json:"prompt"`
+		}
+		if err := json.Unmarshal(sk.Spec, &parsed); err == nil {
+			if parsed.Runtime != nil {
+				spec.Runtime = &dispatch.SkillRuntimeSpec{
+					Image:     parsed.Runtime.Image,
+					Mode:      parsed.Runtime.Mode,
+					Transport: parsed.Runtime.Transport,
+				}
+			}
+			if parsed.Prompt != "" {
+				spec.Prompt = parsed.Prompt
+			}
+		}
+	}
+
+	return spec
 }
 
 // buildMessages converts DB messages to dispatch transport format.

@@ -1,12 +1,15 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/ai-volund/volund/internal/db"
+	"github.com/ai-volund/volund/internal/providers"
 )
 
 // handleListSkills returns published skills from the Forge registry.
@@ -130,6 +133,9 @@ func (s *Services) handlePublishSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Auto-register providers declared in the skill spec.
+	s.registerSkillProviders(r.Context(), in.Name, in.Spec)
+
 	writeJSON(w, http.StatusCreated, skillJSON(sk))
 }
 
@@ -209,6 +215,60 @@ func (s *Services) handleDeleteSkill(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// registerSkillProviders extracts provider definitions from a skill spec
+// and auto-registers them in the OAuth provider registry. Providers are
+// registered without credentials — admin supplies those separately.
+func (s *Services) registerSkillProviders(ctx context.Context, skillName string, spec json.RawMessage) {
+	if s.OAuth == nil || spec == nil {
+		return
+	}
+
+	// Parse provider definitions from the skill spec.
+	var parsed struct {
+		Providers []struct {
+			ID              string            `json:"id"`
+			DisplayName     string            `json:"display_name"`
+			Type            string            `json:"type"`
+			AuthURL         string            `json:"auth_url"`
+			TokenURL        string            `json:"token_url"`
+			Scopes          []string          `json:"scopes"`
+			ExtraAuthParams map[string]string `json:"extra_auth_params"`
+			ExtraHeaders    map[string]string `json:"extra_headers"`
+			IconURL         string            `json:"icon_url"`
+			Category        string            `json:"category"`
+		} `json:"providers"`
+	}
+	if err := json.Unmarshal(spec, &parsed); err != nil || len(parsed.Providers) == 0 {
+		return
+	}
+
+	for _, p := range parsed.Providers {
+		// Only auto-register oauth2 providers — connection_config types
+		// are handled differently (form-based, no OAuth redirect).
+		if p.Type != "oauth2" || p.AuthURL == "" || p.TokenURL == "" {
+			continue
+		}
+
+		err := s.OAuth.Registry.RegisterFromSkill(ctx, &providers.ProviderConfig{
+			ID:              p.ID,
+			DisplayName:     p.DisplayName,
+			AuthURL:         p.AuthURL,
+			TokenURL:        p.TokenURL,
+			Scopes:          p.Scopes,
+			ExtraAuthParams: p.ExtraAuthParams,
+			ExtraHeaders:    p.ExtraHeaders,
+			IconURL:         p.IconURL,
+			Category:        p.Category,
+			SkillID:         skillName,
+		})
+		if err != nil {
+			slog.Warn("failed to register provider from skill", "skill", skillName, "provider", p.ID, "error", err)
+		} else {
+			slog.Info("registered provider from skill", "skill", skillName, "provider", p.ID)
+		}
+	}
 }
 
 func skillJSON(sk *db.RegistrySkill) map[string]any {

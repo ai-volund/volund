@@ -8,9 +8,70 @@ import (
 	"github.com/ai-volund/volund/internal/db"
 )
 
-// POST /v1/agents
+// POST /v1/agents — creates a user-scoped custom agent.
 func (s *Services) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 	claims := claimsFromReq(r)
+
+	var in struct {
+		Name          string          `json:"name"`
+		ProfileType   string          `json:"profile_type"`
+		SystemPrompt  string          `json:"system_prompt"`
+		ModelProvider string          `json:"model_provider"`
+		ModelID       string          `json:"model_id"`
+		Temperature   float64         `json:"temperature"`
+		MaxTokens     int             `json:"max_tokens"`
+		Skills        json.RawMessage `json:"skills"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+
+	if in.ModelProvider == "" {
+		in.ModelProvider = "openai"
+	}
+	if in.ModelID == "" {
+		in.ModelID = "gpt-4o"
+	}
+	if in.Temperature == 0 {
+		in.Temperature = 0.7
+	}
+	if in.MaxTokens == 0 {
+		in.MaxTokens = 4096
+	}
+	if in.ProfileType == "" {
+		in.ProfileType = "specialist"
+	}
+
+	// User-created agents are always user-scoped.
+	userID := claims.Subject
+	profile, err := s.Agents.CreateProfile(r.Context(), &db.AgentProfile{
+		TenantID:      claims.TenantID,
+		Name:          in.Name,
+		ProfileType:   in.ProfileType,
+		Visibility:    "user",
+		OwnerID:       &userID,
+		SystemPrompt:  in.SystemPrompt,
+		ModelProvider: in.ModelProvider,
+		ModelID:       in.ModelID,
+		Temperature:   in.Temperature,
+		MaxTokens:     in.MaxTokens,
+		Skills:        in.Skills,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "create agent failed")
+		return
+	}
+	writeJSON(w, http.StatusCreated, agentJSON(profile))
+}
+
+// POST /v1/admin/agents — creates a system-scoped agent visible to all tenant users.
+func (s *Services) handleCreateSystemAgent(w http.ResponseWriter, r *http.Request) {
+	claims := claimsFromReq(r)
+
+	if claims.Role != "admin" && claims.Role != "platform_admin" {
+		writeError(w, http.StatusForbidden, "admin role required")
+		return
+	}
 
 	var in struct {
 		Name          string          `json:"name"`
@@ -46,6 +107,7 @@ func (s *Services) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 		TenantID:      claims.TenantID,
 		Name:          in.Name,
 		ProfileType:   in.ProfileType,
+		Visibility:    "system",
 		SystemPrompt:  in.SystemPrompt,
 		ModelProvider: in.ModelProvider,
 		ModelID:       in.ModelID,
@@ -54,16 +116,16 @@ func (s *Services) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 		Skills:        in.Skills,
 	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "create agent failed")
+		writeError(w, http.StatusInternalServerError, "create system agent failed")
 		return
 	}
 	writeJSON(w, http.StatusCreated, agentJSON(profile))
 }
 
-// GET /v1/agents
+// GET /v1/agents — returns system agents + current user's custom agents.
 func (s *Services) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	claims := claimsFromReq(r)
-	profiles, err := s.Agents.ListProfiles(r.Context(), claims.TenantID)
+	profiles, err := s.Agents.ListProfiles(r.Context(), claims.TenantID, claims.Subject)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "list failed")
 		return
@@ -87,6 +149,11 @@ func (s *Services) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
 	}
+	// User-scoped agents are only visible to the owner.
+	if profile.Visibility == "user" && (profile.OwnerID == nil || *profile.OwnerID != claims.Subject) {
+		writeError(w, http.StatusForbidden, "forbidden")
+		return
+	}
 	writeJSON(w, http.StatusOK, agentJSON(profile))
 }
 
@@ -100,6 +167,15 @@ func (s *Services) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if profile.TenantID != claims.TenantID {
 		writeError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	// Users can only edit their own custom agents. Admins can edit system agents.
+	if profile.Visibility == "user" && (profile.OwnerID == nil || *profile.OwnerID != claims.Subject) {
+		writeError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	if profile.Visibility == "system" && claims.Role != "admin" && claims.Role != "platform_admin" {
+		writeError(w, http.StatusForbidden, "admin role required to edit system agents")
 		return
 	}
 
@@ -162,6 +238,15 @@ func (s *Services) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
 	}
+	// Users can only delete their own custom agents. Admins can delete system agents.
+	if profile.Visibility == "user" && (profile.OwnerID == nil || *profile.OwnerID != claims.Subject) {
+		writeError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	if profile.Visibility == "system" && claims.Role != "admin" && claims.Role != "platform_admin" {
+		writeError(w, http.StatusForbidden, "admin role required to delete system agents")
+		return
+	}
 	if err := s.Agents.DeleteProfile(r.Context(), r.PathValue("id")); err != nil {
 		writeError(w, http.StatusInternalServerError, "delete failed")
 		return
@@ -174,11 +259,12 @@ func agentJSON(p *db.AgentProfile) map[string]any {
 	if skills == nil {
 		skills = json.RawMessage("[]")
 	}
-	return map[string]any{
+	out := map[string]any{
 		"id":             p.ID,
 		"tenant_id":      p.TenantID,
 		"name":           p.Name,
 		"profile_type":   p.ProfileType,
+		"visibility":     p.Visibility,
 		"system_prompt":  p.SystemPrompt,
 		"model_provider": p.ModelProvider,
 		"model_id":       p.ModelID,
@@ -188,4 +274,8 @@ func agentJSON(p *db.AgentProfile) map[string]any {
 		"created_at":     p.CreatedAt.Format(time.RFC3339),
 		"updated_at":     p.UpdatedAt.Format(time.RFC3339),
 	}
+	if p.OwnerID != nil {
+		out["owner_id"] = *p.OwnerID
+	}
+	return out
 }

@@ -44,6 +44,10 @@ type Config struct {
 	// OIDC SSO providers (JSON-encoded array, or individual env vars)
 	OIDCProviders string // VOLUND_OIDC_PROVIDERS — JSON array of provider configs
 
+	// Base URL for OAuth redirect callbacks (e.g. "http://localhost:8080")
+	// OAuth providers are registered at runtime via the admin API, not compiled in.
+	BaseURL string // VOLUND_BASE_URL
+
 	// LLM providers
 	OllamaURL       string // VOLUND_OLLAMA_URL — Ollama server URL (e.g. http://localhost:11434)
 	OpenAIAPIKey    string // VOLUND_OPENAI_API_KEY
@@ -77,6 +81,7 @@ func Load() *Config {
 		MaxUploadSize:          parseIntOrDefault(os.Getenv("VOLUND_MAX_UPLOAD_SIZE"), 100*1024*1024),
 		CredentialEncryptionKey: os.Getenv("VOLUND_CREDENTIAL_KEY"),
 		OIDCProviders:          os.Getenv("VOLUND_OIDC_PROVIDERS"),
+		BaseURL:                envOrDefault("VOLUND_BASE_URL", "http://localhost:8080"),
 		OllamaURL:              os.Getenv("VOLUND_OLLAMA_URL"),
 		OpenAIAPIKey:    os.Getenv("VOLUND_OPENAI_API_KEY"),
 		OpenAIBaseURL:   os.Getenv("VOLUND_OPENAI_BASE_URL"),

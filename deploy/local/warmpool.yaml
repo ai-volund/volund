@@ -5,7 +5,7 @@ metadata:
   namespace: default
 spec:
   replicas: 2
-  tenantId: "6295b36d-30e9-48f0-935d-7b6d565d5360"
+  tenantId: "ec490373-3502-451d-bebd-76767fbe9240"
   profileId: default-orchestrator
   image: ghcr.io/ai-volund/volund-agent:latest
   llmRouterAddr: volund:9091

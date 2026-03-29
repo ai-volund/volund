@@ -25,6 +25,7 @@ import (
 	"github.com/ai-volund/volund/internal/dispatch"
 	"github.com/ai-volund/volund/internal/gateway/api"
 	"github.com/ai-volund/volund/internal/llm"
+	"github.com/ai-volund/volund/internal/providers"
 	"github.com/ai-volund/volund/internal/storage"
 	"github.com/ai-volund/volund/internal/usage"
 
@@ -265,6 +266,11 @@ func (s *Server) Start(ctx context.Context) error {
 			}
 		}
 
+		// Initialize generic OAuth2 engine for service provider connections.
+		oauthRegistry := providers.NewRegistry(s.pool)
+		oauthEngine := providers.NewEngine(oauthRegistry, s.cfg.BaseURL)
+		slog.Info("OAuth2 engine initialized", "base_url", s.cfg.BaseURL)
+
 		svc := &api.Services{
 			Auth:            auth.NewService(tm, db.NewUserRepo(s.pool), db.NewTenantRepo(s.pool), db.NewRefreshTokenRepo(s.pool)),
 			TM:              tm,
@@ -289,6 +295,7 @@ func (s *Server) Start(ctx context.Context) error {
 			Attachments:     db.NewAttachmentRepo(s.pool),
 			Store:           store,
 			MaxUploadSize:   s.cfg.MaxUploadSize,
+			OAuth:           oauthEngine,
 		}
 		api.Register(mux, svc)
 		slog.Info("REST API routes registered")
