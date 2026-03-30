@@ -51,7 +51,7 @@ func (s *Services) handleStoreCredential(w http.ResponseWriter, r *http.Request)
 
 	err := s.CredBroker.StoreCredential(r.Context(), credentials.StoreRequest{
 		TenantID:     claims.TenantID,
-		UserID:       claims.Subject,
+		UserID:       s.resolveVolundUserID(r.Context(), claims.Subject),
 		Provider:     in.Provider,
 		Token:        in.Token,
 		RefreshToken: in.RefreshToken,
@@ -76,7 +76,7 @@ func (s *Services) handleListCredentials(w http.ResponseWriter, r *http.Request)
 	}
 
 	claims := claimsFromReq(r)
-	providers, err := s.CredBroker.ListProviders(r.Context(), claims.TenantID, claims.Subject)
+	providers, err := s.CredBroker.ListProviders(r.Context(), claims.TenantID, s.resolveVolundUserID(r.Context(), claims.Subject))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "list credentials: "+err.Error())
 		return

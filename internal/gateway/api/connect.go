@@ -20,7 +20,7 @@ func (s *Services) handleConnectStart(w http.ResponseWriter, r *http.Request) {
 	claims := claimsFromReq(r)
 	providerID := r.PathValue("provider")
 
-	authURL, err := s.OAuth.StartAuth(r.Context(), providerID, claims.TenantID, claims.Subject, nil)
+	authURL, err := s.OAuth.StartAuth(r.Context(), providerID, claims.TenantID, s.resolveVolundUserID(r.Context(), claims.Subject), nil)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("provider %q: %v", providerID, err))
 		return
