@@ -58,7 +58,7 @@ func (s *Services) handleUploadAttachment(w http.ResponseWriter, r *http.Request
 	}
 
 	// Create the DB record first to get the attachment ID.
-	userID := claims.Subject
+	userID := s.resolveVolundUserID(r.Context(), claims.Subject)
 	att, err := s.Attachments.Create(r.Context(), &db.Attachment{
 		ConversationID: convo.ID,
 		TenantID:       convo.TenantID,

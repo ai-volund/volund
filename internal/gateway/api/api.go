@@ -37,6 +37,8 @@ type ProfileResolver interface {
 
 // Services holds all dependencies the API handlers need.
 type Services struct {
+	// Pool is the raw database pool for ad-hoc queries (e.g. ba_user_map lookups).
+	Pool    *db.Pool
 	Users   *db.UserRepo
 	Tenants *db.TenantRepo
 	Agents  *db.AgentRepo
@@ -214,6 +216,23 @@ func containsStr(err error, s string) bool {
 		return false
 	}
 	return len(err.Error()) > 0 && stringContains(err.Error(), s)
+}
+
+// resolveVolundUserID maps a better-auth nanoid user ID to the Volund UUID
+// via the ba_user_map bridge table. Falls back to the input if no mapping exists
+// (for backward compatibility with legacy HS256 JWTs that already use UUIDs).
+func (s *Services) resolveVolundUserID(ctx context.Context, baUserID string) string {
+	if s.Pool == nil {
+		return baUserID
+	}
+	var volundID string
+	err := s.Pool.QueryRow(ctx,
+		`SELECT volund_user_id::text FROM ba_user_map WHERE ba_user_id = $1`,
+		baUserID).Scan(&volundID)
+	if err != nil {
+		return baUserID // Not found — assume it's already a UUID (legacy token).
+	}
+	return volundID
 }
 
 func stringContains(haystack, needle string) bool {

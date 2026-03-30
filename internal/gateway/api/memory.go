@@ -39,7 +39,7 @@ func (s *Services) handleStoreMemory(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := in.UserID
 	if userID == "" {
-		userID = claims.Subject
+		userID = s.resolveVolundUserID(r.Context(), claims.Subject)
 	}
 	if in.Type == "" {
 		in.Type = "fact"
@@ -112,7 +112,7 @@ func (s *Services) handleSearchMemory(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := in.UserID
 	if userID == "" {
-		userID = claims.Subject
+		userID = s.resolveVolundUserID(r.Context(), claims.Subject)
 	}
 
 	// Embed the query.
@@ -157,7 +157,7 @@ func (s *Services) handleListMemories(w http.ResponseWriter, r *http.Request) {
 	}
 
 	claims := claimsFromReq(r)
-	mems, err := s.Memories.ListByUser(r.Context(), claims.TenantID, claims.Subject, 100)
+	mems, err := s.Memories.ListByUser(r.Context(), claims.TenantID, s.resolveVolundUserID(r.Context(), claims.Subject), 100)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "list memories: "+err.Error())
 		return

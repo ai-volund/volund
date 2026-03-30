@@ -261,6 +261,7 @@ func (s *Server) Start(ctx context.Context) error {
 		slog.Info("OAuth2 engine initialized", "base_url", s.cfg.BaseURL)
 
 		svc := &api.Services{
+			Pool:            s.pool,
 			Users:           db.NewUserRepo(s.pool),
 			Tenants:         db.NewTenantRepo(s.pool),
 			Agents:          db.NewAgentRepo(s.pool),

@@ -26,7 +26,7 @@ func (s *Services) handleCreateConversation(w http.ResponseWriter, r *http.Reque
 		in.Title = "New conversation"
 	}
 
-	userID := claims.Subject
+	userID := s.resolveVolundUserID(r.Context(), claims.Subject)
 	convo, err := s.Convos.Create(r.Context(), claims.TenantID, &userID, in.Title)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "create conversation failed")
@@ -38,7 +38,7 @@ func (s *Services) handleCreateConversation(w http.ResponseWriter, r *http.Reque
 // GET /v1/conversations
 func (s *Services) handleListConversations(w http.ResponseWriter, r *http.Request) {
 	claims := claimsFromReq(r)
-	convos, err := s.Convos.ListByUser(r.Context(), claims.TenantID, claims.Subject)
+	convos, err := s.Convos.ListByUser(r.Context(), claims.TenantID, s.resolveVolundUserID(r.Context(), claims.Subject))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "list failed")
 		return
@@ -151,7 +151,7 @@ func (s *Services) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 1. Persist the user message.
-	authorID := claims.Subject
+	authorID := s.resolveVolundUserID(r.Context(), claims.Subject)
 	msg, err := s.Convos.AddMessage(r.Context(), &db.Message{
 		ConversationID: convo.ID,
 		Role:           in.Role,
@@ -166,7 +166,7 @@ func (s *Services) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 
 	// 2. Dispatch to the agent pool (fire-and-forget from the HTTP handler's perspective).
 	if s.DispatchFn != nil {
-		go s.dispatchToAgent(context.WithoutCancel(r.Context()), convo, in.ProfileName, in.ProfileType, claims.TenantID, claims.Subject)
+		go s.dispatchToAgent(context.WithoutCancel(r.Context()), convo, in.ProfileName, in.ProfileType, claims.TenantID, s.resolveVolundUserID(r.Context(), claims.Subject))
 	}
 
 	writeJSON(w, http.StatusCreated, msgJSON(msg))

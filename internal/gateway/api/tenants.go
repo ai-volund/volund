@@ -194,7 +194,7 @@ func (s *Services) handleCreateInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	inviterID := claims.Subject
+	inviterID := s.resolveVolundUserID(r.Context(), claims.Subject)
 	invite, err := s.Invites.Create(r.Context(), tenantID, in.Email, in.Role, token, 7*24*time.Hour, &inviterID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "create invite failed")
@@ -227,7 +227,7 @@ func (s *Services) handleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "invite not found or expired")
 		return
 	}
-	if err := s.Users.AddToTenant(r.Context(), invite.TenantID, claims.Subject, invite.Role); err != nil {
+	if err := s.Users.AddToTenant(r.Context(), invite.TenantID, s.resolveVolundUserID(r.Context(), claims.Subject), invite.Role); err != nil {
 		writeError(w, http.StatusInternalServerError, "join tenant failed")
 		return
 	}

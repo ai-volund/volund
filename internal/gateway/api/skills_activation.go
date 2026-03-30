@@ -91,7 +91,8 @@ func (s *Services) handleEnableSkill(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := s.Skills.EnableForUser(r.Context(), claims.TenantID, claims.Subject, sk.ID); err != nil {
+	userID := s.resolveVolundUserID(r.Context(), claims.Subject)
+	if err := s.Skills.EnableForUser(r.Context(), claims.TenantID, userID, sk.ID); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -113,7 +114,8 @@ func (s *Services) handleDisableSkill(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := s.Skills.DisableForUser(r.Context(), claims.TenantID, claims.Subject, sk.ID); err != nil {
+	userID := s.resolveVolundUserID(r.Context(), claims.Subject)
+	if err := s.Skills.DisableForUser(r.Context(), claims.TenantID, userID, sk.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "disable skill: "+err.Error())
 		return
 	}
@@ -125,7 +127,8 @@ func (s *Services) handleDisableSkill(w http.ResponseWriter, r *http.Request) {
 func (s *Services) handleListAvailableSkills(w http.ResponseWriter, r *http.Request) {
 	claims := claimsFromReq(r)
 
-	skills, err := s.Skills.ListAvailableSkills(r.Context(), claims.TenantID, claims.Subject)
+	userID := s.resolveVolundUserID(r.Context(), claims.Subject)
+	skills, err := s.Skills.ListAvailableSkills(r.Context(), claims.TenantID, userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "list skills: "+err.Error())
 		return

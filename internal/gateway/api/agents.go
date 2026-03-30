@@ -43,7 +43,7 @@ func (s *Services) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// User-created agents are always user-scoped.
-	userID := claims.Subject
+	userID := s.resolveVolundUserID(r.Context(), claims.Subject)
 	profile, err := s.Agents.CreateProfile(r.Context(), &db.AgentProfile{
 		TenantID:      claims.TenantID,
 		Name:          in.Name,
@@ -125,7 +125,7 @@ func (s *Services) handleCreateSystemAgent(w http.ResponseWriter, r *http.Reques
 // GET /v1/agents — returns system agents + current user's custom agents.
 func (s *Services) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	claims := claimsFromReq(r)
-	profiles, err := s.Agents.ListProfiles(r.Context(), claims.TenantID, claims.Subject)
+	profiles, err := s.Agents.ListProfiles(r.Context(), claims.TenantID, s.resolveVolundUserID(r.Context(), claims.Subject))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "list failed")
 		return
