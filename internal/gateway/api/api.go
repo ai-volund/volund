@@ -73,6 +73,14 @@ type Services struct {
 	MaxUploadSize int64
 	// OAuth is the generic OAuth2 engine for service provider connections. nil = disabled.
 	OAuth *providers.Engine
+	// LLMProviders is the DB repo for admin-managed LLM provider config. nil = disabled.
+	LLMProviders *db.LLMProviderRepo
+	// LLMListModelsFn lists all models across providers. nil = not available.
+	LLMListModelsFn func(ctx context.Context, provider string) (any, error)
+	// LLMReloadFn is called after provider CRUD to hot-reload the router. nil = no-op.
+	LLMReloadFn func()
+	// LLMTestFn tests a provider config by listing its models. nil = testing disabled.
+	LLMTestFn func(ctx context.Context, p *db.LLMProvider) ([]string, error)
 }
 
 // Register mounts all API routes on mux under /v1/.
@@ -101,7 +109,12 @@ func Register(mux *http.ServeMux, svc *Services) {
 	mux.HandleFunc("DELETE /v1/agents/{id}", RequireAuth(svc.handleDeleteAgent))
 
 	// Agent profiles — admin-managed system agents
-	mux.HandleFunc("POST /v1/admin/agents", RequireAuth(svc.handleCreateSystemAgent))
+	// Admin — member management
+	mux.HandleFunc("PUT /v1/admin/tenants/{id}/members/{userId}/role", RequireAdmin(svc.handleUpdateMemberRole))
+	mux.HandleFunc("DELETE /v1/admin/tenants/{id}/members/{userId}", RequireAdmin(svc.handleRemoveMember))
+
+	// Agent profiles — admin-managed system agents
+	mux.HandleFunc("POST /v1/admin/agents", RequireAdmin(svc.handleCreateSystemAgent))
 
 	// Conversations
 	mux.HandleFunc("POST /v1/conversations", RequireAuth(svc.handleCreateConversation))
@@ -123,9 +136,9 @@ func Register(mux *http.ServeMux, svc *Services) {
 	mux.HandleFunc("GET /v1/skills", RequireAuth(svc.handleListAvailableSkills))
 	mux.HandleFunc("POST /v1/skills/{id}/enable", RequireAuth(svc.handleEnableSkill))
 	mux.HandleFunc("DELETE /v1/skills/{id}/enable", RequireAuth(svc.handleDisableSkill))
-	mux.HandleFunc("POST /v1/admin/skills/{id}/install", RequireAuth(svc.handleInstallSkill))
-	mux.HandleFunc("DELETE /v1/admin/skills/{id}/install", RequireAuth(svc.handleUninstallSkill))
-	mux.HandleFunc("GET /v1/admin/skills/installed", RequireAuth(svc.handleListInstalledSkills))
+	mux.HandleFunc("POST /v1/admin/skills/{id}/install", RequireAdmin(svc.handleInstallSkill))
+	mux.HandleFunc("DELETE /v1/admin/skills/{id}/install", RequireAdmin(svc.handleUninstallSkill))
+	mux.HandleFunc("GET /v1/admin/skills/installed", RequireAdmin(svc.handleListInstalledSkills))
 
 	// Forge registry — skill catalog (public read, auth required for write)
 	mux.HandleFunc("GET /v1/forge/skills", svc.handleListSkills)
@@ -159,9 +172,18 @@ func Register(mux *http.ServeMux, svc *Services) {
 	mux.HandleFunc("GET /v1/connect/{provider}/callback", svc.handleConnectCallback) // no auth — user returns from OAuth redirect
 
 	// Admin — OAuth provider management (credentials only; definitions come from skill manifests)
-	mux.HandleFunc("PUT /v1/admin/providers/{id}/credentials", RequireAuth(svc.handleSetProviderCredentials))
-	mux.HandleFunc("GET /v1/admin/providers", RequireAuth(svc.handleListProviders))
-	mux.HandleFunc("DELETE /v1/admin/providers/{id}", RequireAuth(svc.handleDeleteProvider))
+	mux.HandleFunc("PUT /v1/admin/providers/{id}/credentials", RequireAdmin(svc.handleSetProviderCredentials))
+	mux.HandleFunc("GET /v1/admin/providers", RequireAdmin(svc.handleListProviders))
+	mux.HandleFunc("DELETE /v1/admin/providers/{id}", RequireAdmin(svc.handleDeleteProvider))
+
+	// Admin — LLM provider management (dynamic add/remove/configure AI providers)
+	mux.HandleFunc("POST /v1/admin/llm/providers", RequireAdmin(svc.handleCreateLLMProvider))
+	mux.HandleFunc("GET /v1/admin/llm/providers", RequireAdmin(svc.handleListLLMProviders))
+	mux.HandleFunc("GET /v1/admin/llm/providers/{id}", RequireAdmin(svc.handleGetLLMProvider))
+	mux.HandleFunc("PUT /v1/admin/llm/providers/{id}", RequireAdmin(svc.handleUpdateLLMProvider))
+	mux.HandleFunc("DELETE /v1/admin/llm/providers/{id}", RequireAdmin(svc.handleDeleteLLMProvider))
+	mux.HandleFunc("POST /v1/admin/llm/providers/{id}/test", RequireAdmin(svc.handleTestLLMProvider))
+	mux.HandleFunc("GET /v1/admin/llm/models", RequireAdmin(svc.handleListLLMModels))
 }
 
 // RequireAuth wraps a handler to require a valid JWT; returns 401 if missing.
@@ -173,6 +195,19 @@ func RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+// RequireAdmin wraps a handler to require platform_admin, admin, or owner role.
+func RequireAdmin(next http.HandlerFunc) http.HandlerFunc {
+	return RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		claims := claimsFromReq(r)
+		switch claims.Role {
+		case "platform_admin", "admin", "owner":
+			next(w, r)
+		default:
+			writeError(w, http.StatusForbidden, "admin role required")
+		}
+	})
 }
 
 // writeJSON encodes v as JSON and writes it with the given status code.

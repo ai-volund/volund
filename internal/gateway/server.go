@@ -23,6 +23,9 @@ import (
 	"github.com/ai-volund/volund/internal/dispatch"
 	"github.com/ai-volund/volund/internal/gateway/api"
 	"github.com/ai-volund/volund/internal/llm"
+	anthropicProvider "github.com/ai-volund/volund/internal/llm/anthropic"
+	ollamaProvider "github.com/ai-volund/volund/internal/llm/ollama"
+	openaiProvider "github.com/ai-volund/volund/internal/llm/openai"
 	"github.com/ai-volund/volund/internal/providers"
 	"github.com/ai-volund/volund/internal/storage"
 	"github.com/ai-volund/volund/internal/usage"
@@ -284,9 +287,18 @@ func (s *Server) Start(ctx context.Context) error {
 			Store:           store,
 			MaxUploadSize:   s.cfg.MaxUploadSize,
 			OAuth:           oauthEngine,
+			LLMProviders:    db.NewLLMProviderRepo(s.pool),
+			LLMListModelsFn: func(ctx context.Context, provider string) (any, error) {
+				return s.router.ListModels(ctx, provider)
+			},
+			LLMReloadFn:     func() { s.reloadLLMProviders() },
+			LLMTestFn:       s.testLLMProvider,
 		}
 		api.Register(mux, svc)
 		slog.Info("REST API routes registered")
+
+		// Load DB-configured LLM providers into the router.
+		s.reloadLLMProviders()
 	} else {
 		slog.Warn("no database pool — REST API routes not registered")
 	}
@@ -344,6 +356,92 @@ func (s *Server) dispatchTask(ctx context.Context, task *dispatch.Task) error {
 		go s.watchConvStream(ctx, task.ConversationID, task.DBTaskID)
 	}
 	return nil
+}
+
+// reloadLLMProviders loads enabled providers from DB and registers them in the router.
+// Called on startup and after admin CRUD operations.
+func (s *Server) reloadLLMProviders() {
+	if s.pool == nil || s.router == nil {
+		return
+	}
+	repo := db.NewLLMProviderRepo(s.pool)
+	providers, err := repo.ListEnabled(context.Background())
+	if err != nil {
+		slog.Error("failed to load LLM providers from DB", "error", err)
+		return
+	}
+
+	for _, p := range providers {
+		if p.APIKey == "" {
+			continue
+		}
+		existing := s.router.Providers()
+		alreadyRegistered := false
+		for _, name := range existing {
+			if name == p.Name {
+				alreadyRegistered = true
+				break
+			}
+		}
+		if alreadyRegistered {
+			continue
+		}
+
+		switch p.Type {
+		case "openai", "openai-compatible":
+			op := openaiProvider.New(p.APIKey, p.BaseURL)
+			s.router.Register(op)
+			slog.Info("registered LLM provider from DB", "name", p.Name, "type", p.Type)
+		case "anthropic":
+			ap := anthropicProvider.New(p.APIKey, p.BaseURL)
+			s.router.Register(ap)
+			slog.Info("registered LLM provider from DB", "name", p.Name, "type", p.Type)
+		case "ollama":
+			url := p.BaseURL
+			if url == "" {
+				url = "http://localhost:11434"
+			}
+			op := ollamaProvider.New(url)
+			s.router.Register(op)
+			slog.Info("registered LLM provider from DB", "name", p.Name, "type", p.Type)
+		default:
+			slog.Warn("unknown LLM provider type", "name", p.Name, "type", p.Type)
+		}
+	}
+}
+
+// testLLMProvider creates a temporary provider instance and lists its models.
+func (s *Server) testLLMProvider(ctx context.Context, p *db.LLMProvider) ([]string, error) {
+	var provider llm.Provider
+	switch p.Type {
+	case "openai", "openai-compatible":
+		provider = openaiProvider.New(p.APIKey, p.BaseURL)
+	case "anthropic":
+		provider = anthropicProvider.New(p.APIKey, p.BaseURL)
+	case "ollama":
+		url := p.BaseURL
+		if url == "" {
+			url = "http://localhost:11434"
+		}
+		provider = ollamaProvider.New(url)
+	default:
+		return nil, fmt.Errorf("unknown provider type: %s", p.Type)
+	}
+
+	if err := provider.HealthCheck(ctx); err != nil {
+		return nil, fmt.Errorf("health check failed: %w", err)
+	}
+
+	models, err := provider.ListModels(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list models failed: %w", err)
+	}
+
+	names := make([]string, len(models))
+	for i, m := range models {
+		names[i] = m.ID
+	}
+	return names, nil
 }
 
 // Stop gracefully shuts down both servers.

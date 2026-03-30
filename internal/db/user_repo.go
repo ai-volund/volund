@@ -151,3 +151,25 @@ func scanUser(row pgx.Row) (*User, error) {
 	}
 	return u, nil
 }
+
+// UpdateRole changes a user's role within a tenant.
+func (r *UserRepo) UpdateRole(ctx context.Context, tenantID, userID, role string) error {
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE org_members SET role = $3 WHERE tenant_id = $1 AND user_id = $2`,
+		tenantID, userID, role)
+	if err != nil {
+		return fmt.Errorf("update role: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("membership not found")
+	}
+	return nil
+}
+
+// RemoveFromTenant removes a user's membership in a tenant.
+func (r *UserRepo) RemoveFromTenant(ctx context.Context, tenantID, userID string) error {
+	_, err := r.pool.Exec(ctx,
+		`DELETE FROM org_members WHERE tenant_id = $1 AND user_id = $2`,
+		tenantID, userID)
+	return err
+}

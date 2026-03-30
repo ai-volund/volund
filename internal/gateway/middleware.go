@@ -6,7 +6,9 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"runtime/debug"
+	"strings"
 	"time"
 )
 
@@ -78,12 +80,34 @@ func RecoveryMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// CORSMiddleware adds permissive CORS headers for development.
+// CORSMiddleware adds CORS headers. Uses VOLUND_CORS_ORIGINS for allowed origins;
+// defaults to "*" for development. In production, set this to the actual frontend URLs.
 func CORSMiddleware(next http.Handler) http.Handler {
+	allowedOrigins := os.Getenv("VOLUND_CORS_ORIGINS") // comma-separated, or "*"
+	if allowedOrigins == "" {
+		allowedOrigins = "*"
+	}
+	origins := make(map[string]bool)
+	wildcard := false
+	if allowedOrigins == "*" {
+		wildcard = true
+	} else {
+		for _, o := range strings.Split(allowedOrigins, ",") {
+			origins[strings.TrimSpace(o)] = true
+		}
+	}
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := r.Header.Get("Origin")
+		if wildcard {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+		} else if origins[origin] {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Request-ID")
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
 		w.Header().Set("Access-Control-Max-Age", "86400")
 
 		if r.Method == http.MethodOptions {
