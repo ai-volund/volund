@@ -161,6 +161,12 @@ func (s *Server) Start(ctx context.Context) error {
 
 	tm := auth.NewTokenManager(s.cfg.JWTSecret)
 
+	// Enable JWKS-based JWT validation if the auth service URL is configured.
+	if s.cfg.AuthJWKSURL != "" {
+		tm.SetJWKSURL(s.cfg.AuthJWKSURL)
+		slog.Info("gateway: JWKS validation enabled", "url", s.cfg.AuthJWKSURL)
+	}
+
 	// --- gRPC server ---
 	s.grpcServer = grpc.NewServer(
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),

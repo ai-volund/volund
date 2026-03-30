@@ -48,6 +48,9 @@ type Config struct {
 	// OAuth providers are registered at runtime via the admin API, not compiled in.
 	BaseURL string // VOLUND_BASE_URL
 
+	// Auth service (better-auth)
+	AuthJWKSURL string // VOLUND_AUTH_JWKS_URL — JWKS endpoint for better-auth token validation (e.g. "http://volund-auth:3456/api/auth/jwks")
+
 	// LLM providers
 	OllamaURL       string // VOLUND_OLLAMA_URL — Ollama server URL (e.g. http://localhost:11434)
 	OpenAIAPIKey    string // VOLUND_OPENAI_API_KEY
@@ -82,6 +85,7 @@ func Load() *Config {
 		CredentialEncryptionKey: os.Getenv("VOLUND_CREDENTIAL_KEY"),
 		OIDCProviders:          os.Getenv("VOLUND_OIDC_PROVIDERS"),
 		BaseURL:                envOrDefault("VOLUND_BASE_URL", "http://localhost:8080"),
+		AuthJWKSURL:            os.Getenv("VOLUND_AUTH_JWKS_URL"),
 		OllamaURL:              os.Getenv("VOLUND_OLLAMA_URL"),
 		OpenAIAPIKey:    os.Getenv("VOLUND_OPENAI_API_KEY"),
 		OpenAIBaseURL:   os.Getenv("VOLUND_OPENAI_BASE_URL"),
