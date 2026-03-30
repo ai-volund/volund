@@ -296,3 +296,32 @@ func skillJSON(sk *db.RegistrySkill) map[string]any {
 		"updated_at":  sk.UpdatedAt.Format(time.RFC3339),
 	}
 }
+
+// GET /v1/forge/skills/{id}/versions — list all versions of a skill.
+func (s *Services) handleListSkillVersions(w http.ResponseWriter, r *http.Request) {
+	if s.Skills == nil {
+		writeError(w, http.StatusServiceUnavailable, "skill registry not available")
+		return
+	}
+	id := r.PathValue("id")
+	// For now, return the current version. Full version history requires a
+	// skill_versions table (future enhancement).
+	sk, err := s.Skills.Get(r.Context(), id)
+	if err != nil {
+		sk, err = s.Skills.GetByName(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "skill not found")
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"name": sk.Name,
+		"versions": []map[string]any{
+			{
+				"version":    sk.Version,
+				"created_at": sk.CreatedAt.Format(time.RFC3339),
+				"current":    true,
+			},
+		},
+	})
+}

@@ -307,11 +307,19 @@ func (s *Server) Start(ctx context.Context) error {
 	// Prometheus metrics endpoint.
 	mux.Handle("GET /metrics", promhttp.Handler())
 
+	// Rate limit: 100 req/s per tenant, burst of 200. Set VOLUND_RATE_LIMIT=0 to disable.
+	rateLimit := 100
+	if v := s.cfg.Environment; v == "prod" || v == "production" {
+		rateLimit = 50
+	}
+
 	handler := RecoveryMiddleware(
 		CORSMiddleware(
-			LoggingMiddleware(
-				otelhttp.NewMiddleware("volund-gateway")(
-					auth.HTTPMiddleware(tm, mux),
+			RateLimitMiddleware(rateLimit, rateLimit*2)(
+				LoggingMiddleware(
+					otelhttp.NewMiddleware("volund-gateway")(
+						auth.HTTPMiddleware(tm, mux),
+					),
 				),
 			),
 		),

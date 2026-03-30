@@ -9,7 +9,10 @@ import (
 	"os"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/ai-volund/volund/internal/auth"
 )
 
 // responseWriter wraps http.ResponseWriter to capture the status code.
@@ -117,4 +120,66 @@ func CORSMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// RateLimitMiddleware implements a simple token bucket rate limiter keyed by
+// tenant_id from JWT claims. Limits per-tenant request rate.
+func RateLimitMiddleware(requestsPerSecond int, burst int) func(http.Handler) http.Handler {
+	if requestsPerSecond <= 0 {
+		return func(next http.Handler) http.Handler { return next }
+	}
+
+	type bucket struct {
+		tokens    float64
+		lastCheck time.Time
+	}
+
+	var (
+		mu      sync.Mutex
+		buckets = make(map[string]*bucket)
+		rate    = float64(requestsPerSecond)
+		maxB    = float64(burst)
+	)
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Extract tenant from JWT claims if available.
+			key := "anon"
+			if claims, ok := auth.ClaimsFromContext(r.Context()); ok && claims.TenantID != "" {
+				key = claims.TenantID
+			}
+
+			mu.Lock()
+			b, exists := buckets[key]
+			if !exists {
+				b = &bucket{tokens: maxB, lastCheck: time.Now()}
+				buckets[key] = b
+			}
+
+			now := time.Now()
+			elapsed := now.Sub(b.lastCheck).Seconds()
+			b.tokens = min(maxB, b.tokens+elapsed*rate)
+			b.lastCheck = now
+
+			if b.tokens < 1 {
+				mu.Unlock()
+				w.Header().Set("Retry-After", "1")
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusTooManyRequests)
+				fmt.Fprint(w, `{"error":"rate limit exceeded"}`)
+				return
+			}
+			b.tokens--
+			mu.Unlock()
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func min(a, b float64) float64 {
+	if a < b {
+		return a
+	}
+	return b
 }

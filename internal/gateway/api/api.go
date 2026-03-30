@@ -129,6 +129,9 @@ func Register(mux *http.ServeMux, svc *Services) {
 	// Admin — platform-wide usage
 	mux.HandleFunc("GET /v1/admin/usage/platform", RequireAdmin(svc.handlePlatformUsage))
 
+	// Forge — skill version history
+	mux.HandleFunc("GET /v1/forge/skills/{id}/versions", svc.handleListSkillVersions)
+
 	// API keys — user-facing key management
 	mux.HandleFunc("POST /v1/apikeys", RequireAuth(svc.handleCreateAPIKey))
 	mux.HandleFunc("GET /v1/apikeys", RequireAuth(svc.handleListAPIKeys))
