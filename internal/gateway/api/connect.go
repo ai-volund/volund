@@ -118,7 +118,7 @@ func (s *Services) handleConnectList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get user's connected providers.
-	connected, err := s.CredBroker.ListProviders(r.Context(), claims.TenantID, claims.Subject)
+	connected, err := s.CredBroker.ListProviders(r.Context(), claims.TenantID, s.resolveVolundUserID(r.Context(), claims.Subject))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "list connections: "+err.Error())
 		return
