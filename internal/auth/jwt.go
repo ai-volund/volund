@@ -25,8 +25,11 @@ type Claims struct {
 
 // TokenManager handles JWT creation and validation.
 // Supports HS256 (shared secret) and JWKS-based asymmetric validation.
+// For secret rotation, set both primary and previous secrets — tokens signed
+// with either will be accepted during the rotation window.
 type TokenManager struct {
-	secret []byte
+	secret         []byte
+	previousSecret []byte // set during rotation — accepts tokens signed with old secret
 
 	// JWKS-based validation (for better-auth issued tokens).
 	jwksURL  string
@@ -38,6 +41,14 @@ type TokenManager struct {
 // NewTokenManager creates a TokenManager with the given signing secret.
 func NewTokenManager(secret string) *TokenManager {
 	return &TokenManager{secret: []byte(secret)}
+}
+
+// SetPreviousSecret enables dual-secret validation during secret rotation.
+// Tokens signed with either the current or previous secret will be accepted.
+func (tm *TokenManager) SetPreviousSecret(secret string) {
+	if secret != "" {
+		tm.previousSecret = []byte(secret)
+	}
 }
 
 // SetJWKSURL enables JWKS-based validation by fetching public keys from the
@@ -90,6 +101,20 @@ func (tm *TokenManager) validateHS256(tokenStr string) (*Claims, error) {
 		return tm.secret, nil
 	})
 	if err != nil {
+		// Try previous secret during rotation window.
+		if tm.previousSecret != nil {
+			token2, err2 := jwt.ParseWithClaims(tokenStr, &Claims{}, func(t *jwt.Token) (any, error) {
+				if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+					return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+				}
+				return tm.previousSecret, nil
+			})
+			if err2 == nil {
+				if c, ok := token2.Claims.(*Claims); ok && token2.Valid {
+					return c, nil
+				}
+			}
+		}
 		return nil, fmt.Errorf("invalid token: %w", err)
 	}
 

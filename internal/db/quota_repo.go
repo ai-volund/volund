@@ -32,6 +32,7 @@ type QuotaStatus struct {
 	PctCost     float64  `json:"pct_cost"`      // 0-100
 	Action      string   `json:"on_limit_action"`
 	Exceeded    bool     `json:"exceeded"`
+	Message     string   `json:"message,omitempty"`
 }
 
 // QuotaRepo handles tenant quota operations.
@@ -132,12 +133,14 @@ func (r *QuotaRepo) CheckQuota(ctx context.Context, tenantID string) (*QuotaStat
 		status.PctTokens = float64(summary.TotalTokens) / float64(*q.MaxTokens) * 100
 		if status.PctTokens >= 100 {
 			status.Exceeded = true
+			status.Message = fmt.Sprintf("token limit reached (%d / %d)", summary.TotalTokens, *q.MaxTokens)
 		}
 	}
 	if q.MaxCostUSD != nil && *q.MaxCostUSD > 0 {
 		status.PctCost = summary.TotalCostUSD / *q.MaxCostUSD * 100
 		if status.PctCost >= 100 {
 			status.Exceeded = true
+			status.Message = fmt.Sprintf("cost limit reached ($%.2f / $%.2f)", summary.TotalCostUSD, *q.MaxCostUSD)
 		}
 	}
 

@@ -161,6 +161,10 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 
 	tm := auth.NewTokenManager(s.cfg.JWTSecret)
+	if s.cfg.JWTPreviousSecret != "" {
+		tm.SetPreviousSecret(s.cfg.JWTPreviousSecret)
+		slog.Info("gateway: dual-secret rotation mode enabled")
+	}
 
 	// Enable JWKS-based JWT validation if the auth service URL is configured.
 	if s.cfg.AuthJWKSURL != "" {
@@ -287,6 +291,9 @@ func (s *Server) Start(ctx context.Context) error {
 			Store:           store,
 			MaxUploadSize:   s.cfg.MaxUploadSize,
 			OAuth:           oauthEngine,
+			Teams:           db.NewTeamRepo(s.pool),
+			Schedules:       db.NewScheduleRepo(s.pool),
+			Notifications:   db.NewNotificationRepo(s.pool),
 			Audit:           db.NewAuditRepo(s.pool),
 			LLMProviders:    db.NewLLMProviderRepo(s.pool),
 			LLMListModelsFn: func(ctx context.Context, provider string) (any, error) {

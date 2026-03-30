@@ -164,7 +164,16 @@ func (s *Services) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Dispatch to the agent pool (fire-and-forget from the HTTP handler's perspective).
+	// 2. Check quota before dispatching.
+	if s.Quotas != nil {
+		status, err := s.Quotas.CheckQuota(r.Context(), claims.TenantID)
+		if err == nil && status != nil && status.Exceeded {
+			writeError(w, http.StatusTooManyRequests, "quota exceeded: "+status.Message)
+			return
+		}
+	}
+
+	// 3. Dispatch to the agent pool (fire-and-forget from the HTTP handler's perspective).
 	if s.DispatchFn != nil {
 		go s.dispatchToAgent(context.WithoutCancel(r.Context()), convo, in.ProfileName, in.ProfileType, claims.TenantID, s.resolveVolundUserID(r.Context(), claims.Subject))
 	}

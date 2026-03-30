@@ -1,0 +1,39 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup
+  namespace: default
+spec:
+  schedule: "0 2 * * *"  # Daily at 2am UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: pg-dump
+              image: postgres:16-alpine
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  BACKUP_FILE="/backups/volund-$(date +%Y%m%d-%H%M%S).sql.gz"
+                  echo "Starting backup to $BACKUP_FILE..."
+                  pg_dump -h postgres -U volund -d volund | gzip > "$BACKUP_FILE"
+                  echo "Backup complete: $(ls -lh $BACKUP_FILE)"
+                  # Retain last 7 backups
+                  ls -t /backups/volund-*.sql.gz | tail -n +8 | xargs -r rm
+                  echo "Cleanup done. Remaining backups:"
+                  ls -lh /backups/volund-*.sql.gz
+              env:
+                - name: PGPASSWORD
+                  value: volund
+              volumeMounts:
+                - name: backup-storage
+                  mountPath: /backups
+          volumes:
+            - name: backup-storage
+              emptyDir: {}  # In production: use PVC or S3

@@ -279,3 +279,48 @@ func agentJSON(p *db.AgentProfile) map[string]any {
 	}
 	return out
 }
+
+// GET /v1/agents/{id}/check — check if all skills required by this agent are installed and enabled.
+func (s *Services) handleCheckAgentDeps(w http.ResponseWriter, r *http.Request) {
+	claims := claimsFromReq(r)
+	profile, err := s.Agents.GetProfile(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "agent not found")
+		return
+	}
+
+	userID := s.resolveVolundUserID(r.Context(), claims.Subject)
+
+	// Get user's available (installed + enabled) skills.
+	available, err := s.Skills.ListAvailableSkills(r.Context(), claims.TenantID, userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list skills: "+err.Error())
+		return
+	}
+
+	enabledSet := make(map[string]bool)
+	for _, sk := range available {
+		if sk.Enabled {
+			enabledSet[sk.Name] = true
+		}
+	}
+
+	var skills []string
+	if profile.Skills != nil {
+		json.Unmarshal(profile.Skills, &skills)
+	}
+
+	var missing []string
+	for _, name := range skills {
+		if !enabledSet[name] {
+			missing = append(missing, name)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"agent":    profile.Name,
+		"required": skills,
+		"missing":  missing,
+		"ready":    len(missing) == 0,
+	})
+}

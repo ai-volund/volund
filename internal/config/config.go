@@ -10,6 +10,7 @@ type Config struct {
 	GatewayGRPCAddr  string
 	ControlPlaneAddr string
 	JWTSecret        string
+	JWTPreviousSecret string // VOLUND_JWT_PREVIOUS_SECRET — set during secret rotation
 	LogLevel         string
 
 	// Database
@@ -65,6 +66,7 @@ func Load() *Config {
 		GatewayGRPCAddr:  envOrDefault("VOLUND_GATEWAY_GRPC_ADDR", ":9090"),
 		ControlPlaneAddr: envOrDefault("VOLUND_CONTROLPLANE_ADDR", ":9091"),
 		JWTSecret:        envOrDefault("VOLUND_JWT_SECRET", "dev-secret-change-me"),
+		JWTPreviousSecret: os.Getenv("VOLUND_JWT_PREVIOUS_SECRET"),
 		LogLevel:         envOrDefault("VOLUND_LOG_LEVEL", "info"),
 
 		NATSUrl:         os.Getenv("VOLUND_NATS_URL"),

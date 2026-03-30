@@ -73,6 +73,12 @@ type Services struct {
 	MaxUploadSize int64
 	// OAuth is the generic OAuth2 engine for service provider connections. nil = disabled.
 	OAuth *providers.Engine
+	// Teams repo. nil = disabled.
+	Teams *db.TeamRepo
+	// Schedules repo. nil = disabled.
+	Schedules *db.ScheduleRepo
+	// Notifications repo. nil = disabled.
+	Notifications *db.NotificationRepo
 	// Audit is the audit log repo. nil = audit disabled.
 	Audit *db.AuditRepo
 	// LLMProviders is the DB repo for admin-managed LLM provider config. nil = disabled.
@@ -129,8 +135,16 @@ func Register(mux *http.ServeMux, svc *Services) {
 	// Admin — platform-wide usage
 	mux.HandleFunc("GET /v1/admin/usage/platform", RequireAdmin(svc.handlePlatformUsage))
 
+	// Admin — tenant quota management
+	mux.HandleFunc("PUT /v1/admin/tenants/{id}/quota", RequireAdmin(svc.handleSetTenantQuota))
+	mux.HandleFunc("GET /v1/admin/tenants/{id}/quota", RequireAdmin(svc.handleGetTenantQuota))
+
 	// Forge — skill version history
 	mux.HandleFunc("GET /v1/forge/skills/{id}/versions", svc.handleListSkillVersions)
+
+	// Notifications
+	mux.HandleFunc("GET /v1/notifications", RequireAuth(svc.handleListNotifications))
+	mux.HandleFunc("POST /v1/notifications/{id}/read", RequireAuth(svc.handleMarkNotificationRead))
 
 	// API keys — user-facing key management
 	mux.HandleFunc("POST /v1/apikeys", RequireAuth(svc.handleCreateAPIKey))
@@ -139,6 +153,26 @@ func Register(mux *http.ServeMux, svc *Services) {
 
 	// Agent profiles — admin-managed system agents
 	mux.HandleFunc("POST /v1/admin/agents", RequireAdmin(svc.handleCreateSystemAgent))
+
+	// Agent dependency check
+	mux.HandleFunc("GET /v1/agents/{id}/check", RequireAuth(svc.handleCheckAgentDeps))
+
+	// Teams
+	mux.HandleFunc("POST /v1/teams", RequireAuth(svc.handleCreateTeam))
+	mux.HandleFunc("GET /v1/teams", RequireAuth(svc.handleListTeams))
+	mux.HandleFunc("GET /v1/teams/{id}", RequireAuth(svc.handleGetTeam))
+	mux.HandleFunc("PUT /v1/teams/{id}", RequireAuth(svc.handleUpdateTeam))
+	mux.HandleFunc("DELETE /v1/teams/{id}", RequireAuth(svc.handleDeleteTeam))
+	mux.HandleFunc("POST /v1/teams/{id}/members", RequireAuth(svc.handleAddTeamMember))
+	mux.HandleFunc("DELETE /v1/teams/{id}/members/{profileId}", RequireAuth(svc.handleRemoveTeamMember))
+
+	// Schedules
+	mux.HandleFunc("POST /v1/schedules", RequireAuth(svc.handleCreateSchedule))
+	mux.HandleFunc("GET /v1/schedules", RequireAuth(svc.handleListSchedules))
+	mux.HandleFunc("GET /v1/schedules/{id}", RequireAuth(svc.handleGetSchedule))
+	mux.HandleFunc("PUT /v1/schedules/{id}", RequireAuth(svc.handleUpdateSchedule))
+	mux.HandleFunc("DELETE /v1/schedules/{id}", RequireAuth(svc.handleDeleteSchedule))
+	mux.HandleFunc("GET /v1/admin/schedules", RequireAdmin(svc.handleListAllSchedules))
 
 	// Conversations
 	mux.HandleFunc("POST /v1/conversations", RequireAuth(svc.handleCreateConversation))
