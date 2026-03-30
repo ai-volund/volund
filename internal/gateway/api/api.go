@@ -126,6 +126,14 @@ func Register(mux *http.ServeMux, svc *Services) {
 	// Admin — audit log
 	mux.HandleFunc("GET /v1/admin/audit", RequireAdmin(svc.handleListAudit))
 
+	// Admin — platform-wide usage
+	mux.HandleFunc("GET /v1/admin/usage/platform", RequireAdmin(svc.handlePlatformUsage))
+
+	// API keys — user-facing key management
+	mux.HandleFunc("POST /v1/apikeys", RequireAuth(svc.handleCreateAPIKey))
+	mux.HandleFunc("GET /v1/apikeys", RequireAuth(svc.handleListAPIKeys))
+	mux.HandleFunc("DELETE /v1/apikeys/{id}", RequireAuth(svc.handleDeleteAPIKey))
+
 	// Agent profiles — admin-managed system agents
 	mux.HandleFunc("POST /v1/admin/agents", RequireAdmin(svc.handleCreateSystemAgent))
 

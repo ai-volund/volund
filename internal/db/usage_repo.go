@@ -119,3 +119,19 @@ func (r *UsageRepo) SummaryByConversation(ctx context.Context, convID string) (*
 	}
 	return &s, nil
 }
+
+// PlatformSummary returns aggregate usage across ALL tenants.
+func (r *UsageRepo) PlatformSummary(ctx context.Context, from, to time.Time) (*UsageSummary, error) {
+	var s UsageSummary
+	s.TenantID = "platform"
+	err := r.pool.QueryRow(ctx, `
+		SELECT COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
+		       COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cost_usd), 0), COUNT(*)
+		FROM usage_events
+		WHERE created_at >= $1 AND created_at < $2
+	`, from, to).Scan(&s.TotalInput, &s.TotalOutput, &s.TotalTokens, &s.TotalCostUSD, &s.EventCount)
+	if err != nil {
+		return nil, fmt.Errorf("platform usage summary: %w", err)
+	}
+	return &s, nil
+}

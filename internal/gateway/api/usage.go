@@ -117,3 +117,32 @@ func (s *Services) handleUsageByConversation(w http.ResponseWriter, r *http.Requ
 	}
 	writeJSON(w, http.StatusOK, summary)
 }
+
+// GET /v1/admin/usage/platform — platform-wide usage summary (all tenants).
+func (s *Services) handlePlatformUsage(w http.ResponseWriter, r *http.Request) {
+	if s.Usage == nil {
+		writeError(w, http.StatusServiceUnavailable, "usage tracking not available")
+		return
+	}
+
+	to := time.Now()
+	from := to.AddDate(0, 0, -30)
+
+	if v := r.URL.Query().Get("from"); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			from = t
+		}
+	}
+	if v := r.URL.Query().Get("to"); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			to = t
+		}
+	}
+
+	summary, err := s.Usage.PlatformSummary(r.Context(), from, to)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "platform usage query failed: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, summary)
+}
