@@ -22,22 +22,6 @@ spec:
 apiVersion: volund.ai/v1alpha1
 kind: Skill
 metadata:
-  name: web-search
-  namespace: default
-spec:
-  type: prompt
-  version: "1.0.0"
-  description: "Search the web using a search engine API. Returns a list of results with titles, URLs, and snippets."
-  author: "volund"
-  tags:
-    - builtin
-    - search
-    - web
-  prompt: ""
----
-apiVersion: volund.ai/v1alpha1
-kind: Skill
-metadata:
   name: read-memory
   namespace: default
 spec:

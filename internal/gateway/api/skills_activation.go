@@ -9,12 +9,9 @@ import (
 // ── Admin: tenant-level skill installation ──────────────────────────────────
 
 // POST /v1/admin/skills/{id}/install — installs a skill for the tenant.
+// Any authenticated tenant member can install skills.
 func (s *Services) handleInstallSkill(w http.ResponseWriter, r *http.Request) {
 	claims := claimsFromReq(r)
-	if !isAdmin(r) {
-		writeError(w, http.StatusForbidden, "admin role required")
-		return
-	}
 
 	skillID := r.PathValue("id")
 
@@ -38,12 +35,9 @@ func (s *Services) handleInstallSkill(w http.ResponseWriter, r *http.Request) {
 }
 
 // DELETE /v1/admin/skills/{id}/install — uninstalls a skill from the tenant.
+// Any authenticated tenant member can uninstall skills.
 func (s *Services) handleUninstallSkill(w http.ResponseWriter, r *http.Request) {
 	claims := claimsFromReq(r)
-	if !isAdmin(r) {
-		writeError(w, http.StatusForbidden, "admin role required")
-		return
-	}
 
 	skillID := r.PathValue("id")
 
@@ -67,10 +61,6 @@ func (s *Services) handleUninstallSkill(w http.ResponseWriter, r *http.Request) 
 // GET /v1/admin/skills/installed — lists skills installed for the tenant.
 func (s *Services) handleListInstalledSkills(w http.ResponseWriter, r *http.Request) {
 	claims := claimsFromReq(r)
-	if !isAdmin(r) {
-		writeError(w, http.StatusForbidden, "admin role required")
-		return
-	}
 
 	skills, err := s.Skills.ListTenantSkills(r.Context(), claims.TenantID)
 	if err != nil {
