@@ -269,3 +269,51 @@ func scanInstance(row pgx.Row) (*AgentInstance, error) {
 func isNoRows(err error) bool {
 	return err != nil && err.Error() == "no rows in result set"
 }
+
+// ListAllInstances returns all agent instances across all tenants.
+func (r *AgentRepo) ListAllInstances(ctx context.Context) ([]*AgentInstance, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, tenant_id, profile_id, pod_name, pod_namespace, state,
+		       claimed_at, released_at, last_heartbeat, created_at
+		FROM agent_instances
+		ORDER BY created_at DESC
+		LIMIT 200`)
+	if err != nil {
+		return nil, fmt.Errorf("list all instances: %w", err)
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (*AgentInstance, error) {
+		return scanInstance(row)
+	})
+}
+
+// WarmPoolStats returns aggregate stats for the warm pool.
+type WarmPoolStats struct {
+	Total     int `json:"total"`
+	Available int `json:"available"`
+	Claimed   int `json:"claimed"`
+	Active    int `json:"active"`
+}
+
+func (r *AgentRepo) GetWarmPoolStats(ctx context.Context) (*WarmPoolStats, error) {
+	var stats WarmPoolStats
+	err := r.pool.QueryRow(ctx, `
+		SELECT
+			COUNT(*) AS total,
+			COUNT(*) FILTER (WHERE state = 'warm') AS available,
+			COUNT(*) FILTER (WHERE state = 'active' AND claimed_at IS NOT NULL) AS claimed,
+			COUNT(*) FILTER (WHERE state = 'active') AS active
+		FROM agent_instances
+		WHERE released_at IS NULL`).Scan(&stats.Total, &stats.Available, &stats.Claimed, &stats.Active)
+	if err != nil {
+		return nil, fmt.Errorf("warm pool stats: %w", err)
+	}
+	return &stats, nil
+}
+
+// ForceRelease forces an instance back to cold state.
+func (r *AgentRepo) ForceRelease(ctx context.Context, id string) error {
+	_, err := r.pool.Exec(ctx, `
+		UPDATE agent_instances SET state = 'cold', released_at = NOW(), claimed_at = NULL, profile_id = NULL
+		WHERE id = $1`, id)
+	return err
+}

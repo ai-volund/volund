@@ -287,6 +287,7 @@ func (s *Server) Start(ctx context.Context) error {
 			Store:           store,
 			MaxUploadSize:   s.cfg.MaxUploadSize,
 			OAuth:           oauthEngine,
+			Audit:           db.NewAuditRepo(s.pool),
 			LLMProviders:    db.NewLLMProviderRepo(s.pool),
 			LLMListModelsFn: func(ctx context.Context, provider string) (any, error) {
 				return s.router.ListModels(ctx, provider)

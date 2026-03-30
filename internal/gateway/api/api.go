@@ -73,6 +73,8 @@ type Services struct {
 	MaxUploadSize int64
 	// OAuth is the generic OAuth2 engine for service provider connections. nil = disabled.
 	OAuth *providers.Engine
+	// Audit is the audit log repo. nil = audit disabled.
+	Audit *db.AuditRepo
 	// LLMProviders is the DB repo for admin-managed LLM provider config. nil = disabled.
 	LLMProviders *db.LLMProviderRepo
 	// LLMListModelsFn lists all models across providers. nil = not available.
@@ -112,6 +114,17 @@ func Register(mux *http.ServeMux, svc *Services) {
 	// Admin — member management
 	mux.HandleFunc("PUT /v1/admin/tenants/{id}/members/{userId}/role", RequireAdmin(svc.handleUpdateMemberRole))
 	mux.HandleFunc("DELETE /v1/admin/tenants/{id}/members/{userId}", RequireAdmin(svc.handleRemoveMember))
+
+	// Admin — agent instances & warm pool
+	mux.HandleFunc("GET /v1/admin/instances", RequireAdmin(svc.handleListInstances))
+	mux.HandleFunc("DELETE /v1/admin/instances/{id}", RequireAdmin(svc.handleForceReleaseInstance))
+	mux.HandleFunc("GET /v1/admin/warmpool", RequireAdmin(svc.handleWarmPoolStats))
+
+	// Admin — platform health
+	mux.HandleFunc("GET /v1/admin/health", RequireAdmin(svc.handlePlatformHealth))
+
+	// Admin — audit log
+	mux.HandleFunc("GET /v1/admin/audit", RequireAdmin(svc.handleListAudit))
 
 	// Agent profiles — admin-managed system agents
 	mux.HandleFunc("POST /v1/admin/agents", RequireAdmin(svc.handleCreateSystemAgent))
