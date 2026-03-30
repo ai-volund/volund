@@ -37,8 +37,6 @@ type ProfileResolver interface {
 
 // Services holds all dependencies the API handlers need.
 type Services struct {
-	Auth    *auth.Service
-	TM      *auth.TokenManager
 	Users   *db.UserRepo
 	Tenants *db.TenantRepo
 	Agents  *db.AgentRepo
@@ -64,8 +62,7 @@ type Services struct {
 	Usage *db.UsageRepo
 	// Quotas tracks tenant quotas. nil = quotas disabled (unlimited).
 	Quotas *db.QuotaRepo
-	// OIDCMgr manages OIDC SSO providers. nil = OIDC disabled.
-	OIDCMgr *auth.OIDCManager
+	// OIDCMgr removed — OIDC is now handled by volund-auth (better-auth).
 	// Attachments manages file attachment records. nil = uploads disabled.
 	Attachments *db.AttachmentRepo
 	// Store is the object storage backend for file attachments. nil = uploads disabled.
@@ -78,17 +75,9 @@ type Services struct {
 
 // Register mounts all API routes on mux under /v1/.
 func Register(mux *http.ServeMux, svc *Services) {
-	// Auth
-	mux.HandleFunc("POST /v1/auth/register", svc.handleRegister)
-	mux.HandleFunc("POST /v1/auth/login", svc.handleLogin)
-	mux.HandleFunc("POST /v1/auth/refresh", svc.handleRefresh)
-	mux.HandleFunc("POST /v1/auth/logout", svc.handleLogout)
+	// Auth — /v1/auth/me still works with JWT claims.
+	// All other auth endpoints removed — auth is now handled by volund-auth (better-auth).
 	mux.HandleFunc("GET /v1/auth/me", RequireAuth(svc.handleMe))
-
-	// OIDC SSO
-	mux.HandleFunc("GET /v1/auth/oidc/providers", svc.handleOIDCProviders)
-	mux.HandleFunc("GET /v1/auth/oidc/{provider}", svc.handleOIDCRedirect)
-	mux.HandleFunc("GET /v1/auth/oidc/{provider}/callback", svc.handleOIDCCallback)
 
 	// Tenants
 	mux.HandleFunc("POST /v1/tenants", RequireAuth(svc.handleCreateTenant))

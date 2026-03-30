@@ -16,8 +16,6 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 
-	"encoding/json"
-
 	"github.com/ai-volund/volund/internal/auth"
 	"github.com/ai-volund/volund/internal/config"
 	"github.com/ai-volund/volund/internal/credentials"
@@ -232,22 +230,7 @@ func (s *Server) Start(ctx context.Context) error {
 			return vecs, err
 		}
 
-		// Initialize OIDC manager if configured.
-		var oidcMgr *auth.OIDCManager
-		if s.cfg.OIDCProviders != "" {
-			var providers []auth.OIDCProviderConfig
-			if err := json.Unmarshal([]byte(s.cfg.OIDCProviders), &providers); err != nil {
-				slog.Warn("failed to parse OIDC providers config", "error", err)
-			} else if len(providers) > 0 {
-				mgr, err := auth.NewOIDCManager(ctx, providers)
-				if err != nil {
-					slog.Warn("OIDC provider discovery failed", "error", err)
-				} else {
-					oidcMgr = mgr
-					slog.Info("OIDC SSO enabled", "providers", mgr.Providers())
-				}
-			}
-		}
+		// OIDC SSO is now handled by volund-auth (better-auth).
 
 		// Initialize object storage for file attachments.
 		var store storage.Store
@@ -278,8 +261,6 @@ func (s *Server) Start(ctx context.Context) error {
 		slog.Info("OAuth2 engine initialized", "base_url", s.cfg.BaseURL)
 
 		svc := &api.Services{
-			Auth:            auth.NewService(tm, db.NewUserRepo(s.pool), db.NewTenantRepo(s.pool), db.NewRefreshTokenRepo(s.pool)),
-			TM:              tm,
 			Users:           db.NewUserRepo(s.pool),
 			Tenants:         db.NewTenantRepo(s.pool),
 			Agents:          db.NewAgentRepo(s.pool),
@@ -297,7 +278,7 @@ func (s *Server) Start(ctx context.Context) error {
 			Usage:           db.NewUsageRepo(s.pool),
 			Quotas:          db.NewQuotaRepo(s.pool),
 			ProfileResolver: profileResolver,
-			OIDCMgr:         oidcMgr,
+
 			Attachments:     db.NewAttachmentRepo(s.pool),
 			Store:           store,
 			MaxUploadSize:   s.cfg.MaxUploadSize,

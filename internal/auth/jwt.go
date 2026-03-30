@@ -2,6 +2,8 @@ package auth
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -197,4 +199,14 @@ func (tm *TokenManager) refreshJWKS() error {
 
 	slog.Info("refreshed JWKS", "url", tm.jwksURL, "keys", len(keys))
 	return nil
+}
+
+
+// GenerateToken generates a random hex token of the given byte length.
+func GenerateToken(byteLen int) (string, error) {
+	b := make([]byte, byteLen)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }

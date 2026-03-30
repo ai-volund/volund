@@ -214,41 +214,10 @@ func (s *Services) handleCreateInvite(w http.ResponseWriter, r *http.Request) {
 func (s *Services) handleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 	token := r.PathValue("token")
 
-	// Must be logged in to accept.
+	// User must be authenticated (signed up via better-auth) to accept an invite.
 	claims, ok := auth.ClaimsFromContext(r.Context())
 	if !ok {
-		// Also support new user registration via invite — require an account body.
-		var in struct {
-			Email    string `json:"email"`
-			Password string `json:"password"`
-			Name     string `json:"display_name"`
-		}
-		if !decode(w, r, &in) {
-			return
-		}
-
-		invite, err := s.Invites.GetByToken(r.Context(), token)
-		if err != nil || invite == nil {
-			writeError(w, http.StatusNotFound, "invite not found or expired")
-			return
-		}
-
-		// Create the user and add to the tenant from the invite.
-		pair, user, err := s.Auth.Register(r.Context(), auth.RegisterInput{
-			Email:    in.Email,
-			Password: in.Password,
-			OrgName:  "", // don't create a new org
-		})
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		if err := s.Users.AddToTenant(r.Context(), invite.TenantID, user.ID, invite.Role); err != nil {
-			writeError(w, http.StatusInternalServerError, "join tenant failed")
-			return
-		}
-		_ = s.Invites.Accept(r.Context(), invite.ID)
-		writeJSON(w, http.StatusOK, tokenResponse(pair, user.ID, user.Email, user.DisplayName))
+		writeError(w, http.StatusUnauthorized, "sign up first, then accept the invite")
 		return
 	}
 
