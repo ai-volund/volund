@@ -89,8 +89,8 @@ func (r *AgentRepo) ListProfiles(ctx context.Context, tenantID string, userID st
 		       system_prompt, model_provider, model_id, temperature, max_tokens,
 		       skills, created_at, updated_at
 		FROM agent_profiles
-		WHERE tenant_id = $1
-		  AND (visibility = 'system' OR (visibility = 'user' AND owner_id = $2))
+		WHERE (tenant_id = $1 AND (visibility = 'system' OR (visibility = 'user' AND owner_id = $2)))
+		   OR (visibility = 'system')
 		ORDER BY created_at
 	`, tenantID, userID)
 	if err != nil {
