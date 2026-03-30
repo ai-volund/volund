@@ -197,12 +197,14 @@ func RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// RequireAdmin wraps a handler to require platform_admin, admin, or owner role.
+// RequireAdmin wraps a handler to require platform_admin or admin role.
+// Note: "owner" is a tenant-level role (owns their org) and does NOT grant
+// platform admin access. Only platform_admin and admin can access admin endpoints.
 func RequireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return RequireAuth(func(w http.ResponseWriter, r *http.Request) {
 		claims := claimsFromReq(r)
 		switch claims.Role {
-		case "platform_admin", "admin", "owner":
+		case "platform_admin", "admin":
 			next(w, r)
 		default:
 			writeError(w, http.StatusForbidden, "admin role required")
